@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import io
+import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Any, Iterator
@@ -233,6 +235,42 @@ def create_app(config_path: str | Path) -> FastAPI:
         return {"ok": True}
 
     # ---- 输入 ----
+
+    @app.get("/api/tiles/{tile_id}/frame.jpg")
+    def api_frame(tile_id: str) -> Response:
+        """贴图窗口轮询用的单帧接口。"""
+        worker = rt.worker(tile_id)
+        jpeg = worker.latest_jpeg()
+        if jpeg is None:
+            raise HTTPException(503, "no frame yet")
+        return Response(
+            content=jpeg,
+            media_type="image/jpeg",
+            headers={"Cache-Control": "no-store, no-cache"},
+        )
+
+    @app.post("/api/tiles/{tile_id}/pin")
+    def api_pin(tile_id: str, request: Request, scale: float = 1.0) -> dict[str, Any]:
+        """在本机弹出一个 Snipaste 风格的贴图窗口。"""
+        rt.worker(tile_id)  # 不存在则 404
+        base = str(request.base_url).rstrip("/")
+        pin_scale = max(0.2, min(6.0, float(scale)))
+
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--pin", tile_id, "--server", base, "--scale", str(pin_scale)]
+        else:
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent.parent / "run.py"),
+                "--pin", tile_id,
+                "--server", base,
+                "--scale", str(pin_scale),
+            ]
+        try:
+            subprocess.Popen(cmd, start_new_session=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"启动贴图失败: {exc}") from exc
+        return {"ok": True, "tile": tile_id, "scale": pin_scale}
 
     @app.post("/api/tiles/{tile_id}/input")
     def api_input(tile_id: str, body: InputBody) -> dict[str, Any]:

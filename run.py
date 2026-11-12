@@ -50,10 +50,22 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("-p", "--port", type=int, default=None, help="监听端口（默认取配置里的 server.port）")
     parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
     parser.add_argument("--list-windows", action="store_true", help="列出当前窗口后退出")
+    parser.add_argument("--pin", metavar="TILE_ID", default=None,
+                        help="以贴图模式启动：把这个 tile 钉在桌面最上层（Snipaste 风格）")
+    parser.add_argument("--server", default="http://127.0.0.1:8777",
+                        help="贴图模式连接的面板地址（默认 http://127.0.0.1:8777）")
+    parser.add_argument("--scale", type=float, default=1.0, help="贴图缩放倍数（默认 1.0）")
+    parser.add_argument("--pin-x", type=int, default=None, help="贴图窗口初始 X 坐标")
+    parser.add_argument("--pin-y", type=int, default=None, help="贴图窗口初始 Y 坐标")
     args = parser.parse_args(argv)
 
     if args.list_windows:
         return cmd_list_windows()
+
+    if args.pin:
+        from wd.pin import run_pin
+
+        return run_pin(args.server, args.pin, scale=args.scale, x=args.pin_x, y=args.pin_y)
 
     config_path = Path(args.config)
     if not config_path.exists():

@@ -262,14 +262,28 @@ class X11Backend(PlatformBackend):
         except Exception:
             return False
 
+    def _is_focused(self, win: Any) -> bool:
+        """目标窗口是否已经有输入焦点。
+
+        仅「在最上层」还不够：窗口没有焦点时，第一次点击会被 WM 吃掉用来聚焦，
+        按钮本身不会响应。必须区分这两种情况。
+        """
+        active = self._active_window()
+        if active is None:
+            return False
+        try:
+            return active in (int(win.id), int(self._toplevel(win).id))
+        except Exception:
+            return False
+
     def _prepare_click(self, win: Any, sx: int, sy: int) -> int | None:
         """把指针移到目标处；必要时激活窗口。返回需要事后还原的窗口 id。"""
         self._root.warp_pointer(sx, sy)
         self._dpy.sync()
         time.sleep(0.03)
 
-        if self._is_on_top(win):
-            return None  # 已经在最上层，直接点，不闪烁
+        if self._is_on_top(win) and self._is_focused(win):
+            return None  # 已经既在最上层又有焦点，直接点，不闪烁
 
         prev = self._active_window() if _RESTORE_FOCUS_AFTER_CLICK else None
         self._activate(win)

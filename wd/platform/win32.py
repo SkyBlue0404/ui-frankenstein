@@ -126,6 +126,8 @@ user32.GetAncestor.argtypes = [wintypes.HWND, wintypes.UINT]
 user32.GetAncestor.restype = wintypes.HWND
 user32.BringWindowToTop.argtypes = [wintypes.HWND]
 user32.BringWindowToTop.restype = wintypes.BOOL
+user32.GetForegroundWindow.argtypes = []
+user32.GetForegroundWindow.restype = wintypes.HWND
 
 GA_ROOT = 2
 
@@ -320,6 +322,22 @@ class Win32Backend(PlatformBackend):
         except Exception:
             return False
 
+    def _is_focused(self, hwnd: int) -> bool:
+        """目标窗口是否已经是前台窗口。
+
+        只判断 Z 序不够：窗口没有焦点时，第一次点击会被系统用来激活它。
+        """
+        fg = user32.GetForegroundWindow()
+        if not fg:
+            return False
+        target = wintypes.HWND(hwnd)
+        if fg == target or user32.IsChild(target, fg):
+            return True
+        try:
+            return user32.GetAncestor(fg, GA_ROOT) == user32.GetAncestor(target, GA_ROOT)
+        except Exception:
+            return False
+
     def _raise(self, hwnd: int) -> None:
         h = wintypes.HWND(hwnd)
         try:
@@ -333,14 +351,14 @@ class Win32Backend(PlatformBackend):
 
     def _prepare_click(self, hwnd: int, sx: int, sy: int) -> None:
         user32.SetCursorPos(sx, sy)
-        if self._is_on_top(hwnd, sx, sy):
+        if self._is_on_top(hwnd, sx, sy) and self._is_focused(hwnd):
             time.sleep(0.02)
             return
         self._raise(hwnd)
-        # 等 WM 完成 Z 序重排，否则注入的点击会落到被挡住的窗口上
+        # 等 WM 完成激活（含 Z 序重排），否则注入的点击会被用来聚焦窗口
         time.sleep(0.25)
         user32.SetCursorPos(sx, sy)
-        time.sleep(0.05)
+        time.sleep(0.08)
 
     def click(self, handle: str, px: int, py: int, button: int = 1, double: bool = False) -> None:
         hwnd = int(handle)

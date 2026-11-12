@@ -80,6 +80,7 @@ function createTile(cfg) {
       <span class="dot" data-role="dot" title="未连接"></span>
       <span class="tile-title" data-role="title"></span>
       <span class="tile-meta" data-role="meta"></span>
+      <button class="icon" data-role="pin" title="钉到桌面（Snipaste 风格，可拖动/缩放/点击回传）">📌</button>
       <button class="icon" data-role="focus" title="放大 / 还原 (双击)">⛶</button>
     </header>
     <div class="viewport" data-role="viewport">
@@ -135,6 +136,10 @@ function createTile(cfg) {
   $('[data-role=focus]', el).addEventListener('click', (e) => {
     e.stopPropagation();
     toggleFocus(entry);
+  });
+  $('[data-role=pin]', el).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    await pinTile(entry.cfg.id);
   });
   el.addEventListener('dblclick', (e) => {
     e.preventDefault();
@@ -252,8 +257,23 @@ function onViewportWheel(evt, entry) {
   }, 80);
 }
 
-async function sendInput(tileId, body) {
+/** 在服务器那台机器上弹出一个贴图窗口（Snipaste 风格）。 */
+async function pinTile(tileId) {
   try {
+    const res = await fetch(`/api/tiles/${encodeURIComponent(tileId)}/pin`, {
+      method: 'POST',
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || `HTTP ${res.status}`);
+    }
+    toast('已贴到桌面，拖拽可移动，右键有菜单');
+  } catch (err) {
+    toast(`贴图失败: ${err.message}`, true);
+  }
+}
+
+async function sendInput(tileId, body) {  try {
     const res = await fetch(`/api/tiles/${encodeURIComponent(tileId)}/input`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },

@@ -169,6 +169,11 @@ class TileWorker(threading.Thread):
                 self._cond.wait(timeout)
             return self._seq, self._jpeg
 
+    def latest_jpeg(self) -> bytes | None:
+        """取当前最新一帧（贴图窗口轮询用）。"""
+        with self._cond:
+            return self._jpeg
+
     def status(self) -> dict[str, Any]:
         with self._cond:
             return {
