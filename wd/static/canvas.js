@@ -3,16 +3,16 @@
 
 const $ = (sel, root = document) => root.querySelector(sel);
 
-const HANDLE_HIT = 10;
-const MIN_W = 90;
-const MIN_H = 60;
+const MIN_W = 80;
+const MIN_H = 40;
+const DRAG_THRESHOLD = 4; // 超过这个位移算拖拽，否则算点击
 
 const app = {
   locked: false,
   filter: '',
   panels: new Map(), // id -> entry
-  drag: null,        // 拖动 / 缩放状态
-  modal: { win: null, region: null, dragging: false, start: null },
+  press: null,       // 按下状态（拖拽 / 点击判定）
+  resize: null,      // 缩放状态
 };
 
 /* ================================================================== */
@@ -67,7 +67,7 @@ function syncPanels(tiles) {
 /* ================================================================== */
 
 function autoRect(index) {
-  const W = 430, H = 290, GAP = 18, PAD = 24, COLS = 3;
+  const W = 430, H = 260, GAP = 16, PAD = 20, COLS = 3;
   return {
     x: PAD + (index % COLS) * (W + GAP),
     y: PAD + Math.floor(index / COLS) * (H + GAP),
@@ -80,15 +80,22 @@ function createPanel(cfg, index) {
   el.className = 'panel';
   el.dataset.id = cfg.id;
   el.innerHTML = `
-    <header class="panel-head" data-role="head">
-      <span class="dot" data-role="dot" title="未连接"></span>
-      <span class="panel-title" data-role="title"></span>
-      <button class="mini" data-role="pin" title="贴到桌面（Snipaste 风格）">📌</button>
-      <button class="mini danger" data-role="del" title="从画布移除">✕</button>
-    </header>
     <div class="panel-body" data-role="body">
       <img data-role="img" alt="" draggable="false">
       <div class="badge waiting" data-role="badge">连接中…</div>
+    </div>
+    <span class="dot" data-role="dot" title="未连接"></span>
+    <div class="panel-tools">
+      <button class="mini" data-act="pin" title="贴到桌面（Snipaste 风格）">📌</button>
+      <select class="scale" data-act="scale" title="缩放">
+        <option value="0.5">50%</option>
+        <option value="0.75">75%</option>
+        <option value="1" selected>100%</option>
+        <option value="1.5">150%</option>
+        <option value="2">200%</option>
+        <option value="3">300%</option>
+      </select>
+      <button class="mini danger" data-act="close" title="从画布移除">✕</button>
     </div>
     <i class="handle" data-dir="nw"></i><i class="handle" data-dir="n"></i><i class="handle" data-dir="ne"></i>
     <i class="handle" data-dir="w"></i><i class="handle" data-dir="e"></i>
@@ -97,23 +104,38 @@ function createPanel(cfg, index) {
   const entry = {
     cfg,
     el,
-    head: $('[data-role=head]', el),
     body: $('[data-role=body]', el),
     img: $('[data-role=img]', el),
     dot: $('[data-role=dot]', el),
     badge: $('[data-role=badge]', el),
     rect: cfg.canvas ? { ...cfg.canvas } : autoRect(index),
+    sized: !!cfg.canvas,
     retries: 0,
     retryTimer: null,
   };
 
-  $('[data-role=title]', el).textContent = cfg.title || cfg.id;
+  el.title = cfg.title || cfg.id;
   applyRect(entry, entry.rect);
 
   entry.streamUrl = () => `/stream/${encodeURIComponent(cfg.id)}?t=${Date.now()}`;
   entry.img.addEventListener('load', () => {
     entry.retries = 0;
     entry.badge.hidden = true;
+    if (!entry.sized) {
+      entry.sized = true;
+      // 面板尺寸跟随实际裁剪画面（等比），超过 560px 宽就缩下来
+      const nw = entry.img.naturalWidth || 0;
+      const nh = entry.img.naturalHeight || 0;
+      if (nw && nh) {
+        const f = Math.min(1, 560 / nw);
+        entry.rect = {
+          ...entry.rect,
+          w: Math.max(MIN_W, Math.round(nw * f)),
+          h: Math.max(MIN_H, Math.round(nh * f)),
+        };
+        applyRect(entry, entry.rect);
+      }
+    }
   });
   entry.img.addEventListener('error', () => {
     if (!entry.el.isConnected) return;
@@ -130,27 +152,32 @@ function createPanel(cfg, index) {
   });
   entry.img.src = entry.streamUrl();
 
-  // 拖动（标题栏）
-  entry.head.addEventListener('pointerdown', (evt) => startDrag(evt, entry, 'move'));
-  // 缩放（手柄）
-  el.querySelectorAll('.handle').forEach((h) => {
-    h.addEventListener('pointerdown', (evt) => startDrag(evt, entry, 'resize', h.dataset.dir));
-  });
-  // 操作原窗口
-  entry.body.addEventListener('click', (evt) => onBodyClick(evt, entry));
+  // 按下：拖拽 或 点击（按位移阈值区分）
+  entry.body.addEventListener('pointerdown', (evt) => startPress(evt, entry));
   entry.body.addEventListener('contextmenu', (evt) => evt.preventDefault());
-  entry.body.addEventListener('wheel', (evt) => onBodyWheel(evt, entry), { passive: false });
-  // 工具
-  $('[data-role=pin]', el).addEventListener('click', async (e) => {
+  entry.body.addEventListener('wheel', (evt) => onWheel(evt, entry), { passive: false });
+
+  // 8 向缩放手柄
+  el.querySelectorAll('.handle').forEach((h) => {
+    h.addEventListener('pointerdown', (evt) => startResize(evt, entry, h.dataset.dir));
+  });
+
+  // 悬浮工具条
+  $('[data-act=pin]', el).addEventListener('click', async (e) => {
     e.stopPropagation();
     await pinTile(cfg.id);
   });
-  $('[data-role=del]', el).addEventListener('click', async (e) => {
+  $('[data-act=close]', el).addEventListener('click', async (e) => {
     e.stopPropagation();
     if (!confirm(`从画布移除「${cfg.title || cfg.id}」？`)) return;
     await fetch(`/api/tiles/${encodeURIComponent(cfg.id)}`, { method: 'DELETE' });
     await refresh();
   });
+  $('[data-act=scale]', el).addEventListener('change', (e) => {
+    e.stopPropagation();
+    applyScale(entry, parseFloat(e.target.value) || 1);
+  });
+  $('[data-act=scale]', el).addEventListener('pointerdown', (e) => e.stopPropagation());
 
   applyStatus(entry, cfg);
   return entry;
@@ -161,6 +188,20 @@ function applyRect(entry, rect) {
   entry.el.style.top = `${Math.round(rect.y)}px`;
   entry.el.style.width = `${Math.round(rect.w)}px`;
   entry.el.style.height = `${Math.round(rect.h)}px`;
+}
+
+function applyScale(entry, factor) {
+  const nw = entry.img.naturalWidth || 0;
+  const nh = entry.img.naturalHeight || 0;
+  if (!nw || !nh) return;
+  entry.rect = {
+    ...entry.rect,
+    w: Math.max(MIN_W, Math.round(nw * factor)),
+    h: Math.max(MIN_H, Math.round(nh * factor)),
+  };
+  entry.sized = true;
+  applyRect(entry, entry.rect);
+  saveRect(entry);
 }
 
 function applyStatus(entry, cfg) {
@@ -193,72 +234,130 @@ async function pollStatus() {
 }
 
 /* ================================================================== */
-/* 拖动 / 缩放                                                        */
+/* 拖拽 / 点击                                                        */
 /* ================================================================== */
 
-function startDrag(evt, entry, mode, dir = '') {
+function canvasPoint(evt) {
+  const canvas = $('#canvas');
+  const r = canvas.getBoundingClientRect();
+  return { x: evt.clientX - r.left + canvas.scrollLeft, y: evt.clientY - r.top + canvas.scrollTop };
+}
+
+function startPress(evt, entry) {
+  if (evt.button !== 0) return;
+  if (evt.target.closest('.panel-tools')) return;
+  evt.preventDefault();
+
+  const p = canvasPoint(evt);
+  app.press = {
+    entry,
+    startX: p.x,
+    startY: p.y,
+    base: { ...entry.rect },
+    moved: false,
+    pointerId: evt.pointerId,
+  };
+  try { entry.body.setPointerCapture(evt.pointerId); } catch { /* 合成事件 */ }
+  document.addEventListener('pointermove', onPressMove);
+  document.addEventListener('pointerup', onPressUp);
+}
+
+function onPressMove(evt) {
+  const p = app.press;
+  if (!p) return;
+  const cur = canvasPoint(evt);
+  const dx = cur.x - p.startX;
+  const dy = cur.y - p.startY;
+
+  if (!p.moved && Math.hypot(dx, dy) > DRAG_THRESHOLD) {
+    p.moved = true;
+    p.entry.el.classList.add('dragging');
+  }
+  if (p.moved) {
+    p.entry.rect = {
+      ...p.base,
+      x: Math.max(0, p.base.x + dx),
+      y: Math.max(0, p.base.y + dy),
+    };
+    applyRect(p.entry, p.entry.rect);
+  }
+}
+
+async function onPressUp(evt) {
+  const p = app.press;
+  app.press = null;
+  document.removeEventListener('pointermove', onPressMove);
+  document.removeEventListener('pointerup', onPressUp);
+  if (!p) return;
+  try { p.entry.body.releasePointerCapture(p.pointerId); } catch { /* ignore */ }
+
+  if (p.moved) {
+    p.entry.el.classList.remove('dragging');
+    await saveRect(p.entry);
+  } else {
+    forwardClick(p.entry, evt);
+  }
+}
+
+/* ================================================================== */
+/* 缩放                                                               */
+/* ================================================================== */
+
+function startResize(evt, entry, dir) {
   if (evt.button !== 0) return;
   evt.preventDefault();
   evt.stopPropagation();
 
-  const canvasRect = $('#canvas').getBoundingClientRect();
-  const base = { ...entry.rect };
-  app.drag = {
-    entry, mode, dir, base,
-    startX: evt.clientX - canvasRect.left + $('#canvas').scrollLeft,
-    startY: evt.clientY - canvasRect.top + $('#canvas').scrollTop,
+  const p = canvasPoint(evt);
+  app.resize = {
+    entry, dir,
+    startX: p.x,
+    startY: p.y,
+    base: { ...entry.rect },
+    pointerId: evt.pointerId,
   };
-  entry.el.classList.add(mode === 'move' ? 'dragging' : 'resizing');
+  entry.el.classList.add('resizing');
+  entry.sized = true;
   try { entry.el.setPointerCapture(evt.pointerId); } catch { /* 合成事件 */ }
-
-  const move = (e) => onDragMove(e);
-  const up = (e) => {
-    document.removeEventListener('pointermove', move);
-    document.removeEventListener('pointerup', up);
-    onDragEnd(e);
-  };
-  document.addEventListener('pointermove', move);
-  document.addEventListener('pointerup', up);
+  document.addEventListener('pointermove', onResizeMove);
+  document.addEventListener('pointerup', onResizeUp);
 }
 
-function onDragMove(evt) {
-  const d = app.drag;
-  if (!d) return;
-  const canvas = $('#canvas');
-  const r = canvas.getBoundingClientRect();
-  const x = evt.clientX - r.left + canvas.scrollLeft;
-  const y = evt.clientY - r.top + canvas.scrollTop;
-  const dx = x - d.startX;
-  const dy = y - d.startY;
+function onResizeMove(evt) {
+  const s = app.resize;
+  if (!s) return;
+  const cur = canvasPoint(evt);
+  const dx = cur.x - s.startX;
+  const dy = cur.y - s.startY;
 
-  let { x: bx, y: by, w, h } = d.base;
-  if (d.mode === 'move') {
-    bx = Math.max(0, bx + dx);
-    by = Math.max(0, by + dy);
-  } else {
-    let x2 = bx + w;
-    let y2 = by + h;
-    if (d.dir.includes('w')) bx = Math.min(bx + dx, x2 - MIN_W);
-    if (d.dir.includes('e')) x2 = Math.max(x2 + dx, bx + MIN_W);
-    if (d.dir.includes('n')) by = Math.min(by + dy, y2 - MIN_H);
-    if (d.dir.includes('s')) y2 = Math.max(y2 + dy, by + MIN_H);
-    bx = Math.max(0, bx);
-    by = Math.max(0, by);
-    w = x2 - bx;
-    h = y2 - by;
-  }
-  d.entry.rect = { x: bx, y: by, w, h };
-  applyRect(d.entry, d.entry.rect);
+  let { x, y, w, h } = s.base;
+  let x2 = x + w;
+  let y2 = y + h;
+  if (s.dir.includes('w')) x = Math.min(x + dx, x2 - MIN_W);
+  if (s.dir.includes('e')) x2 = Math.max(x2 + dx, x + MIN_W);
+  if (s.dir.includes('n')) y = Math.min(y + dy, y2 - MIN_H);
+  if (s.dir.includes('s')) y2 = Math.max(y2 + dy, y + MIN_H);
+  x = Math.max(0, x);
+  y = Math.max(0, y);
+  s.entry.rect = { x, y, w: x2 - x, h: y2 - y };
+  applyRect(s.entry, s.entry.rect);
 }
 
-async function onDragEnd() {
-  const d = app.drag;
-  app.drag = null;
-  if (!d) return;
-  d.entry.el.classList.remove('dragging', 'resizing');
-  const { x, y, w, h } = d.entry.rect;
+async function onResizeUp(evt) {
+  const s = app.resize;
+  app.resize = null;
+  document.removeEventListener('pointermove', onResizeMove);
+  document.removeEventListener('pointerup', onResizeUp);
+  if (!s) return;
+  try { s.entry.el.releasePointerCapture(s.pointerId); } catch { /* ignore */ }
+  s.entry.el.classList.remove('resizing');
+  await saveRect(s.entry);
+}
+
+async function saveRect(entry) {
+  const { x, y, w, h } = entry.rect;
   try {
-    await fetch(`/api/tiles/${encodeURIComponent(d.entry.cfg.id)}/canvas`, {
+    await fetch(`/api/tiles/${encodeURIComponent(entry.cfg.id)}/canvas`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ x, y, w, h }),
@@ -292,20 +391,20 @@ function isInteractive(entry) {
   return !app.locked && entry.cfg.interactive !== false;
 }
 
-function onBodyClick(evt, entry) {
+function forwardClick(entry, evt) {
   if (!isInteractive(entry)) return;
   const p = mapPoint(evt, entry.img);
   if (!p) return;
   fetch(`/api/tiles/${encodeURIComponent(entry.cfg.id)}/input`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ type: 'click', x: p.x, y: p.y, button: evt.button + 1 }),
+    body: JSON.stringify({ type: 'click', x: p.x, y: p.y, button: 1 }),
   }).catch(() => {});
 }
 
 let wheelPending = 0;
 let wheelTimer = null;
-function onBodyWheel(evt, entry) {
+function onWheel(evt, entry) {
   if (!isInteractive(entry)) return;
   evt.preventDefault();
   const p = mapPoint(evt, entry.img);
@@ -344,13 +443,9 @@ function bindToolbar() {
     const list = [...app.panels.values()];
     for (let i = 0; i < list.length; i++) {
       const entry = list[i];
-      entry.rect = autoRect(i);
+      entry.rect = { ...autoRect(i), w: entry.rect.w, h: entry.rect.h };
       applyRect(entry, entry.rect);
-      await fetch(`/api/tiles/${encodeURIComponent(entry.cfg.id)}/canvas`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(entry.rect),
-      }).catch(() => {});
+      await saveRect(entry);
     }
     toast('已重新排列');
   });
@@ -392,16 +487,12 @@ const modal = {
 };
 
 function bindModal() {
-  document.querySelectorAll('[data-close]').forEach((b) => {
-    b.addEventListener('click', closeModal);
-  });
+  document.querySelectorAll('[data-close]').forEach((b) => b.addEventListener('click', closeModal));
   $('#modal').addEventListener('click', (e) => {
     if (e.target.id === 'modal') closeModal();
   });
-
   $('#win-filter').addEventListener('input', renderWindows);
   $('#btn-create').addEventListener('click', createFromModal);
-
   bindPickDrag();
 }
 
@@ -489,14 +580,13 @@ function bindPickDrag() {
   const toNorm = (evt) => {
     const r = $('#pick-img').getBoundingClientRect();
     return {
-      x: clamp01((evt.clientX - r.left) / r.width),
-      y: clamp01((evt.clientY - r.top) / r.height),
+      x: Math.max(0, Math.min(1, (evt.clientX - r.left) / r.width)),
+      y: Math.max(0, Math.min(1, (evt.clientY - r.top) / r.height)),
     };
   };
   let start = null;
 
   shot.addEventListener('pointerdown', (evt) => {
-    if (evt.target.closest('.pick-sel')) return;
     evt.preventDefault();
     start = toNorm(evt);
     modal.region = { x: start.x, y: start.y, w: 0, h: 0 };
@@ -549,13 +639,16 @@ async function createFromModal() {
   const id = `panel-${Date.now().toString(36)}`;
   const regex = `^${escapeRe(w.title)}$`;
 
-  // 放到画布右下角空位
+  // 面板尺寸 = 选区实际像素（超过 560 宽就等比缩下来）
+  const nw = Math.max(1, Math.round(w.rect.w * modal.region.w));
+  const nh = Math.max(1, Math.round(w.rect.h * modal.region.h));
+  const f = Math.min(1, 560 / nw);
   const canvas = $('#canvas');
   const rect = {
-    x: Math.max(20, canvas.scrollLeft + 40 + Math.random() * 120),
-    y: Math.max(20, canvas.scrollTop + 40 + Math.random() * 120),
-    w: 460,
-    h: 300,
+    x: Math.max(12, canvas.scrollLeft + 30 + Math.random() * 100),
+    y: Math.max(12, canvas.scrollTop + 30 + Math.random() * 100),
+    w: Math.max(MIN_W, Math.round(nw * f)),
+    h: Math.max(MIN_H, Math.round(nh * f)),
   };
 
   try {
@@ -590,7 +683,6 @@ async function createFromModal() {
 /* 工具                                                               */
 /* ================================================================== */
 
-function clamp01(v) { return Math.max(0, Math.min(1, v)); }
 function escapeRe(s) { return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
 
 let toastTimer = null;
@@ -603,9 +695,5 @@ function toast(msg, isErr = false) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.hidden = true; }, 2600);
 }
-
-window.addEventListener('resize', () => {
-  for (const entry of app.panels.values()) applyRect(entry, entry.rect);
-});
 
 boot();

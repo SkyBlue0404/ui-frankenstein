@@ -46,6 +46,16 @@ class CanvasBody(BaseModel):
     h: float = 300.0
 
 
+class RegionBody(BaseModel):
+    """全屏框选提交的屏幕坐标矩形。"""
+
+    handle: str
+    x: int
+    y: int
+    w: int
+    h: int
+
+
 # ---------------------------------------------------------------------------
 # 运行时状态
 # ---------------------------------------------------------------------------
@@ -100,7 +110,9 @@ class Runtime:
 
     # ---- 瞬时 tile（模式 A） ----
 
-    def add_transient(self, handle: str, title: str) -> dict[str, Any]:
+    def add_transient(
+        self, handle: str, title: str, region: dict[str, float] | None = None
+    ) -> dict[str, Any]:
         with self.lock:
             base = f"pin-{int(time.time() * 1000) % 1_000_000}"
             tid = base
@@ -118,7 +130,7 @@ class Runtime:
                     "app_regex": "",
                     "index": 0,
                 },
-                "region": {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
+                "region": region or {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
                 "fps": float(self.cfg.defaults.get("fps", 8)),
                 "quality": int(self.cfg.defaults.get("quality", 80)),
                 "capture": str(self.cfg.defaults.get("capture", "window")),
@@ -222,20 +234,26 @@ def create_app(config_path: str | Path) -> FastAPI:
             ]
         subprocess.Popen(cmd, start_new_session=True)
 
-    def _capture_focused() -> dict[str, Any] | None:
-        win = rt.backend.focused_window()
-        if win is None:
-            return None
-        return rt.add_transient(win.handle, win.title)
+    def _spawn_selector(handle: str) -> None:
+        """拉起全屏框选遮罩（Snipaste 式），选完再贴。"""
+        base = f"http://127.0.0.1:{int(cfg.server.get('port', 8777))}"
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--select", "--handle", str(handle), "--server", base]
+        else:
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent.parent / "run.py"),
+                "--select", "--handle", str(handle), "--server", base,
+            ]
+        subprocess.Popen(cmd, start_new_session=True)
 
     def _on_hotkey() -> None:
         try:
-            tile = _capture_focused()
-            if tile is None:
+            win = rt.backend.focused_window()
+            if win is None:
                 print("[!] 快捷键：没有找到聚焦窗口", file=sys.stderr)
                 return
-            _spawn_pin(tile["id"], own=True)
-            print(f"[i] 已贴图: {tile['title'][:40]}")
+            _spawn_selector(win.handle)
         except Exception as exc:  # noqa: BLE001
             print(f"[!] 快捷键处理失败: {exc}", file=sys.stderr)
 
@@ -337,21 +355,56 @@ def create_app(config_path: str | Path) -> FastAPI:
         cfg.save()
         return {"ok": True, "persisted": True}
 
-    # ---- 模式 A：截取当前聚焦窗口 ----
+    # ---- 模式 A：区域截取 ----
 
     @app.post("/api/capture-focus")
-    def api_capture_focus(pin: bool = True) -> dict[str, Any]:
-        tile = _capture_focused()
-        if tile is None:
+    def api_capture_focus() -> dict[str, Any]:
+        """打开全屏框选遮罩（等同于按快捷键）。"""
+        win = rt.backend.focused_window()
+        if win is None:
             raise HTTPException(404, "没有找到聚焦窗口")
-        pinned = False
-        if pin:
-            try:
-                _spawn_pin(tile["id"], own=True)
-                pinned = True
-            except Exception as exc:  # noqa: BLE001
-                raise HTTPException(500, f"拉起贴图失败: {exc}") from exc
-        return {"ok": True, "id": tile["id"], "title": tile["title"], "pinned": pinned}
+        try:
+            _spawn_selector(win.handle)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"拉起框选失败: {exc}") from exc
+        return {"ok": True, "handle": win.handle, "title": win.title}
+
+    @app.post("/api/capture-region")
+    def api_capture_region(body: RegionBody) -> dict[str, Any]:
+        """遮罩选完区域后回传屏幕坐标，转成窗口内归一化区域并贴图。"""
+        try:
+            rect = rt.backend.window_rect(body.handle)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(400, f"窗口已失效: {exc}") from exc
+        if rect.w <= 0 or rect.h <= 0:
+            raise HTTPException(400, "窗口尺寸无效")
+
+        # 屏幕坐标 -> 窗口内归一化，并夹到 [0, 1]
+        nx = (body.x - rect.x) / rect.w
+        ny = (body.y - rect.y) / rect.h
+        nw = body.w / rect.w
+        nh = body.h / rect.h
+        nx = max(0.0, min(1.0, nx))
+        ny = max(0.0, min(1.0, ny))
+        nw = max(0.002, min(1.0 - nx, nw))
+        nh = max(0.002, min(1.0 - ny, nh))
+        region = {
+            "x": round(nx, 6), "y": round(ny, 6),
+            "w": round(nw, 6), "h": round(nh, 6),
+        }
+
+        win = next(
+            (w for w in rt.backend.list_windows() if int(w.handle) == int(body.handle)),
+            None,
+        )
+        title = win.title if win else f"区域 {body.w}×{body.h}"
+        tile = rt.add_transient(body.handle, title, region=region)
+        try:
+            _spawn_pin(tile["id"], own=True)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(500, f"拉起贴图失败: {exc}") from exc
+        print(f"[i] 已贴图: {title[:40]}  区域 {body.w}×{body.h}")
+        return {"ok": True, "id": tile["id"], "title": title, "region": region}
 
     @app.post("/api/reload")
     def api_reload() -> dict[str, Any]:

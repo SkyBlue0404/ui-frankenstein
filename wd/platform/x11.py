@@ -168,25 +168,42 @@ class X11Backend(PlatformBackend):
         """当前聚焦的窗口（模式 A 快捷键截取用）。
 
         会被快捷键线程调用，而 Xlib 连接不是线程安全的，所以整段加锁。
+        `_NET_ACTIVE_WINDOW` 为 0（桌面焦点、无活动窗口）时退回**指针下面的窗口**，
+        否则用户在桌面上按快捷键会毫无反应。
         """
         try:
             with self._lock:
-                active = self._active_window()
-                if active is None:
-                    return None
                 wins = self.list_windows()
-                for w in wins:
-                    if int(w.handle) == active:
-                        return w
-                # _NET_ACTIVE_WINDOW 有时给的是 frame 而不是 client
+                by_toplevel: dict[int, WindowInfo] = {}
                 for w in wins:
                     try:
-                        win = self._dpy.create_resource_object("window", int(w.handle))
-                        if self._toplevel(win).id == active:
-                            return w
+                        top = self._toplevel(
+                            self._dpy.create_resource_object("window", int(w.handle))
+                        )
+                        by_toplevel[top.id] = w
                     except Exception:
                         continue
-        except Exception:
+
+                active = self._active_window()
+                if active:
+                    if int(active) in by_toplevel:
+                        return by_toplevel[int(active)]
+                    for w in wins:  # 兜底：直接比对 handle
+                        if int(w.handle) == int(active):
+                            return w
+
+                # 没有活动窗口 → 用指针下面的顶层窗口
+                child = self._pointer_window()
+                if child is not None:
+                    try:
+                        top = self._toplevel(
+                            self._dpy.create_resource_object("window", child.id)
+                        )
+                        if top.id in by_toplevel:
+                            return by_toplevel[top.id]
+                    except Exception:
+                        pass
+        except Exception:  # noqa: BLE001
             pass
         return None
 
@@ -295,6 +312,8 @@ class X11Backend(PlatformBackend):
 
     def click(self, handle: str, px: int, py: int, button: int = 1, double: bool = False) -> None:
         xbtn = _BUTTON_MAP.get(button, 1)
+        restore: tuple[Any, Any, bool, int | None, int] | None = None
+
         with self._lock:
             win = self._dpy.create_resource_object("window", int(handle))
             sx, sy = self._to_screen(handle, px, py)
@@ -308,20 +327,38 @@ class X11Backend(PlatformBackend):
 
                 for _ in range(2 if double else 1):
                     self._send_button(win, True, xbtn, px, py, sx, sy)
-                    time.sleep(0.02)
+                    time.sleep(0.008)
                     self._send_button(win, False, xbtn, px, py, sx, sy)
-                    time.sleep(0.03)
-                self._restore_after_click(frame, above, stack_ok, prev, int(handle))
-                return
+                    time.sleep(0.012)
+                restore = (frame, above, stack_ok, prev, int(handle))
+            else:
+                # 物理注入兜底：某些自绘 UI 会忽略合成事件
+                prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
+                self._raw_click(sx, sy, xbtn, double)
+                if prev and prev != int(handle):
+                    try:
+                        self._activate(self._dpy.create_resource_object("window", prev))
+                    except Exception:
+                        pass
 
-            # 物理注入兜底：某些自绘 UI 会忽略合成事件
-            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
-            self._raw_click(sx, sy, xbtn, double)
-            if prev and prev != int(handle):
-                try:
-                    self._activate(self._dpy.create_resource_object("window", prev))
-                except Exception:
-                    pass
+        # 还原放后台：HTTP 请求立刻返回，用户感觉不到等待
+        if restore is not None:
+            threading.Thread(
+                target=self._restore_after_click, args=restore, daemon=True, name="click-restore"
+            ).start()
+
+    def _wait_active(self, win: Any, timeout: float = 0.18) -> bool:
+        """轮询等到窗口真正获得焦点，而不是死等一个固定时长。"""
+        try:
+            ids = (int(win.id), int(self._toplevel(win).id))
+        except Exception:
+            return False
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            if self._active_window() in ids:
+                return True
+            time.sleep(0.004)
+        return False
 
     def _ensure_active(
         self, win: Any, frame: Any, above_id: int | None, stack_ok: bool
@@ -330,44 +367,40 @@ class X11Backend(PlatformBackend):
 
         Chromium / Electron（VS Code、Chrome 等）**只处理「自己处于激活状态」
         时的合成事件**，不激活就完全忽略。而激活必然伴随一次 raise，所以这里
-        「激活 → 马上塞回去」，把窗口闪到前台的时间压到最短（约 0.25s），
-        既让点击生效，又不会让它停在最前面。
+        「激活 → 轮询到焦点 → 马上塞回去」，把闪到前台的时间压到最短。
         """
         if self._is_focused(win):
             return  # 本来就激活，不闪
         self._activate(win)
-        time.sleep(0.18)  # 等 WM 把激活请求处理完
+        self._wait_active(win, timeout=0.18)
         self._restore_stack(frame, above_id, stack_ok)
-        time.sleep(0.06)
+        time.sleep(0.01)
 
     def _restore_after_click(
         self, frame: Any, above_id: int | None, stack_ok: bool, prev: int | None, handle: int
     ) -> None:
-        """点击后把被程序自己抬起来的窗口塞回去，并还原输入焦点。
-
-        程序处理点击是**异步**的：它可能在 ButtonPress 之后几十毫秒才去
-        `_NET_ACTIVE_WINDOW` / raise，只还原一次会被它盖掉。所以这里做
-        「还原 → 校验 → 不稳就再来一轮」的收敛循环。
-        """
-        if not (_RESTORE_STACK_AFTER_CLICK or _RESTORE_FOCUS_AFTER_CLICK):
-            return
-
-        want_focus = _RESTORE_FOCUS_AFTER_CLICK and prev is not None and prev != handle
-        for _ in range(4):
-            time.sleep(0.07)
-            if _RESTORE_STACK_AFTER_CLICK:
-                self._restore_stack(frame, above_id, stack_ok)
-            if want_focus and self._active_window() != prev:
-                try:
-                    self._activate(self._dpy.create_resource_object("window", int(prev)))
-                except Exception:
-                    pass
-            if not want_focus or self._active_window() == prev:
-                break
+        """点击后把被程序自己抬起来的窗口塞回去，并还原输入焦点（后台执行）。"""
+        try:
+            with self._lock:
+                time.sleep(0.012)
+                if _RESTORE_STACK_AFTER_CLICK:
+                    self._restore_stack(frame, above_id, stack_ok)
+                if _RESTORE_FOCUS_AFTER_CLICK and prev and prev != handle:
+                    if self._active_window() != prev:
+                        time.sleep(0.015)
+                        try:
+                            self._activate(
+                                self._dpy.create_resource_object("window", int(prev))
+                            )
+                        except Exception:
+                            pass
+        except Exception:  # noqa: BLE001
+            pass
 
     def scroll(self, handle: str, px: int, py: int, delta: int) -> None:
         xbtn = 4 if delta > 0 else 5
         steps = min(20, max(1, abs(int(delta))))
+        restore: tuple[Any, Any, bool, int | None, int] | None = None
         with self._lock:
             win = self._dpy.create_resource_object("window", int(handle))
             sx, sy = self._to_screen(handle, px, py)
@@ -382,24 +415,27 @@ class X11Backend(PlatformBackend):
                 for _ in range(steps):
                     self._send_button(win, True, xbtn, px, py, sx, sy)
                     self._send_button(win, False, xbtn, px, py, sx, sy)
-                    time.sleep(0.01)
-                self._restore_after_click(frame, above, stack_ok, prev, int(handle))
-                return
-
-            sx, sy = self._to_screen(handle, px, py)
-            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
-            self._root.warp_pointer(sx, sy)
-            self._dpy.sync()
-            for _ in range(steps):
-                xtest.fake_input(self._dpy, X.ButtonPress, xbtn)
-                xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
+                    time.sleep(0.006)
+                restore = (frame, above, stack_ok, prev, int(handle))
+            else:
+                prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
+                self._root.warp_pointer(sx, sy)
                 self._dpy.sync()
-                time.sleep(0.01)
-            if prev and prev != int(handle):
-                try:
-                    self._activate(self._dpy.create_resource_object("window", prev))
-                except Exception:
-                    pass
+                for _ in range(steps):
+                    xtest.fake_input(self._dpy, X.ButtonPress, xbtn)
+                    xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
+                    self._dpy.sync()
+                    time.sleep(0.01)
+                if prev and prev != int(handle):
+                    try:
+                        self._activate(self._dpy.create_resource_object("window", prev))
+                    except Exception:
+                        pass
+
+        if restore is not None:
+            threading.Thread(
+                target=self._restore_after_click, args=restore, daemon=True, name="scroll-restore"
+            ).start()
 
     def _toplevel(self, win: Any) -> Any:
         """找到窗口的顶层 frame（GNOME 等 reparenting WM 下客户区外面还套了一层）。"""

@@ -115,14 +115,12 @@ function makePin(cfg) {
 
 async function captureFocus() {
   try {
-    const res = await fetch('/api/capture-focus?pin=true', { method: 'POST' });
+    const res = await fetch('/api/capture-focus', { method: 'POST' });
     if (!res.ok) {
       const d = await res.json().catch(() => ({}));
       throw new Error(d.detail || `HTTP ${res.status}`);
     }
-    const data = await res.json();
-    toast(`已截取：${data.title.slice(0, 36)}`);
-    await refresh();
+    toast('遮罩已弹出，拖拽框选区域');
   } catch (err) {
     toast(`截取失败: ${err.message}（先聚焦一个窗口再试）`, true);
   }

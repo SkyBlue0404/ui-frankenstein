@@ -76,10 +76,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pin-y", type=int, default=None, help="贴图窗口初始 Y 坐标")
     parser.add_argument("--own-tile", action="store_true",
                         help="（内部用）关窗时回收服务端的瞬时 tile")
+    parser.add_argument("--select", action="store_true",
+                        help="（内部用）全屏框选一块区域后贴到桌面")
+    parser.add_argument("--handle", default="", help="（内部用）框选要绑定到的窗口句柄")
     args = parser.parse_args(argv)
 
     if args.list_windows:
         return cmd_list_windows()
+
+    if args.select:
+        from wd.overlay import run_selector
+
+        return run_selector(args.server, args.handle)
 
     if args.pin:
         from wd.pin import run_pin
