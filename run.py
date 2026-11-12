@@ -15,7 +15,15 @@ import threading
 import webbrowser
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent
+# 冻结成单文件 exe 后，__file__ 指向的是临时解压目录；
+# 用户配置必须落在 exe 旁边，否则每次运行都会「丢配置」。
+if getattr(sys, "frozen", False):
+    ROOT = Path(sys.executable).resolve().parent
+    _BUNDLE = Path(getattr(sys, "_MEIPASS", ROOT))
+else:
+    ROOT = Path(__file__).resolve().parent
+    _BUNDLE = ROOT
+
 sys.path.insert(0, str(ROOT))
 
 from wd.config import Config  # noqa: E402
@@ -69,8 +77,20 @@ def main(argv: list[str] | None = None) -> int:
 
     config_path = Path(args.config)
     if not config_path.exists():
-        print(f"[!] 配置文件不存在: {config_path}", file=sys.stderr)
-        print(f"    可以从 config.example.json 复制一份：cp config.example.json {config_path.name}", file=sys.stderr)
+        # 首次运行自动生成一份，exe 双击即用
+        try:
+            example = _BUNDLE / "config.example.json"
+            if example.exists():
+                config_path.write_text(example.read_text("utf-8"), "utf-8")
+            else:
+                from wd.config import DEFAULT_CONFIG
+
+                config_path.write_text(
+                    json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), "utf-8"
+                )
+            print(f"[i] 已生成默认配置: {config_path}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[!] 无法生成配置 {config_path}: {exc}", file=sys.stderr)
 
     cfg = Config(config_path)
     if not cfg.tiles:

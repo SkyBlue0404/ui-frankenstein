@@ -146,6 +146,24 @@ Per-Monitor DPI Aware，避免高分屏下坐标偏移。
 | 顶栏「可操作」 | 锁定后点击不再回传，纯观看 |
 | 顶栏过滤框 | 按标题过滤 tile |
 
+## 打包成可执行文件
+
+```bash
+pip install -r requirements.txt pyinstaller
+pyinstaller --noconfirm --clean window-dashboard.spec
+```
+
+产物是**单文件**，直接双击/运行即可（首次运行会在旁边自动生成 `config.json`）：
+
+| 平台 | 产物 |
+|---|---|
+| Linux | `dist/window-dashboard` |
+| Windows | `dist/window-dashboard.exe` |
+
+> PyInstaller **不支持交叉编译** —— 在 Linux 上打不出 Windows 的 exe，反之亦然。
+> 仓库里带了 `.github/workflows/build.yml`，推到 GitHub 后会自动在两种原生
+> runner 上各打一份，作为 artifact 下载；打 `v*` tag 时还会自动发 Release。
+
 ## 常见问题
 
 **点击没反应？** 有些程序（游戏、部分 Electron/Qt 应用）会忽略合成事件。

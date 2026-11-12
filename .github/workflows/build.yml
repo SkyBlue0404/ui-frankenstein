@@ -1,0 +1,76 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  # ---------------------------------------------------------------------
+  # Linux 和 Windows 各自在自己的原生 runner 上打包。
+  # PyInstaller 不支持交叉编译 —— 想要 .exe 就必须在 Windows 上构建。
+  # ---------------------------------------------------------------------
+  build:
+    name: ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux x86_64
+            os: ubuntu-22.04
+            artifact: window-dashboard-linux-x86_64
+            binary: window-dashboard
+          - label: Windows x86_64
+            os: windows-latest
+            artifact: window-dashboard-windows-x86_64
+            binary: window-dashboard.exe
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install "pyinstaller>=6.0"
+
+      - name: Build
+        run: pyinstaller --noconfirm --clean window-dashboard.spec
+
+      - name: Smoke test — 列出窗口（Linux 需要虚拟显示）
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          xvfb-run -a ./dist/window-dashboard --list-windows || true
+
+      - name: Smoke test — 版本/帮助
+        shell: bash
+        run: ./dist/${{ matrix.binary }} --help > /dev/null
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/${{ matrix.binary }}
+          if-no-files-found: error
+
+      # 打 tag 时自动生成 Release
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/${{ matrix.binary }}
+          draft: false
+          generate_release_notes: true
