@@ -26,6 +26,15 @@ else:
 
 sys.path.insert(0, str(ROOT))
 
+# Windows 控制台默认是 cp1252 / cp936，打印中文标题（--list-windows、--help）
+# 会直接抛 UnicodeEncodeError。冻结成 exe 后没有 PYTHONIOENCODING 兜底，
+# 必须自己把标准输出切到 UTF-8。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    except (AttributeError, ValueError):
+        pass
+
 from wd.config import Config  # noqa: E402
 from wd.platform import get_backend  # noqa: E402
 

@@ -57,6 +57,10 @@ jobs:
 
       - name: Smoke test — 版本/帮助
         shell: bash
+        env:
+          # Windows 控制台默认 cp1252，中文帮助文本会炸
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: "1"
         run: ./dist/${{ matrix.binary }} --help > /dev/null
 
       - name: Upload artifact
