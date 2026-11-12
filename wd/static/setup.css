@@ -136,9 +136,31 @@ body.setup { overflow: hidden; }
   border: 1.5px solid var(--accent);
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, .52);
-  pointer-events: none;
+  pointer-events: none;   /* 命中由 JS 按坐标算，避免手柄抢事件 */
   border-radius: 1px;
 }
+
+/* 8 个缩放手柄：四角 + 四边 */
+.sel i {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  background: #fff;
+  border: 1.5px solid var(--accent);
+  border-radius: 2px;
+  box-sizing: border-box;
+}
+.sel i[data-dir="nw"] { left: -5px;  top: -5px;    cursor: nwse-resize; }
+.sel i[data-dir="ne"] { right: -5px; top: -5px;    cursor: nesw-resize; }
+.sel i[data-dir="sw"] { left: -5px;  bottom: -5px; cursor: nesw-resize; }
+.sel i[data-dir="se"] { right: -5px; bottom: -5px; cursor: nwse-resize; }
+.sel i[data-dir="n"]  { left: 50%;   top: -5px;    margin-left: -4.5px; cursor: ns-resize; }
+.sel i[data-dir="s"]  { left: 50%;   bottom: -5px; margin-left: -4.5px; cursor: ns-resize; }
+.sel i[data-dir="w"]  { top: 50%;    left: -5px;   margin-top: -4.5px;  cursor: ew-resize; }
+.sel i[data-dir="e"]  { top: 50%;    right: -5px;  margin-top: -4.5px;  cursor: ew-resize; }
+
+.shot.moving { cursor: move; }
+.shot.resizing { cursor: default; }
 
 .coords {
   flex: 0 0 auto;

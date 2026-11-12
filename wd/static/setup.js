@@ -104,9 +104,16 @@ async function selectWindow(w) {
 /* 框选                                                                */
 /* ------------------------------------------------------------------ */
 
+/* ------------------------------------------------------------------ */
+/* 框选：新建 / 拖动 / 8 向缩放                                          */
+/* ------------------------------------------------------------------ */
+
+const HANDLE_HIT = 9; // 手柄命中半径（CSS 像素）
+
 function bindDrag() {
   const shot = $('#shot');
-  if (!shot) return;
+  const sel = $('#sel');
+  if (!shot || !sel) return;
 
   const toNorm = (evt) => {
     const img = $('#shot-img');
@@ -117,40 +124,121 @@ function bindDrag() {
     };
   };
 
+  const toPx = (evt) => {
+    const r = $('#shot-img').getBoundingClientRect();
+    return { x: evt.clientX - r.left, y: evt.clientY - r.top, w: r.width, h: r.height };
+  };
+
+  /** 指针落在哪个手柄上；不在手柄上返回 ''。选框本身 pointer-events:none，靠坐标判定。 */
+  const hitHandle = (evt) => {
+    const p = toPx(evt);
+    const hx = s.region.x * p.w, hy = s.region.y * p.h;
+    const hw = s.region.w * p.w, hh = s.region.h * p.h;
+    const nearL = Math.abs(p.x - hx) <= HANDLE_HIT;
+    const nearR = Math.abs(p.x - (hx + hw)) <= HANDLE_HIT;
+    const nearT = Math.abs(p.y - hy) <= HANDLE_HIT;
+    const nearB = Math.abs(p.y - (hy + hh)) <= HANDLE_HIT;
+    const inX = p.x >= hx - HANDLE_HIT && p.x <= hx + hw + HANDLE_HIT;
+    const inY = p.y >= hy - HANDLE_HIT && p.y <= hy + hh + HANDLE_HIT;
+    if (!inX || !inY) return '';
+    if (nearT && nearL) return 'nw';
+    if (nearT && nearR) return 'ne';
+    if (nearB && nearL) return 'sw';
+    if (nearB && nearR) return 'se';
+    if (nearT) return 'n';
+    if (nearB) return 's';
+    if (nearL) return 'w';
+    if (nearR) return 'e';
+    return '';
+  };
+
+  const insideSel = (evt) => {
+    const p = toNorm(evt);
+    return p.x > s.region.x && p.x < s.region.x + s.region.w &&
+           p.y > s.region.y && p.y < s.region.y + s.region.h;
+  };
+
+  /** 选区还是「整张图」——此时点哪儿都算内部，应该允许重新框选。 */
+  const isFullFrame = () =>
+    s.region.x < 0.005 && s.region.y < 0.005 &&
+    s.region.w > 0.99 && s.region.h > 0.99;
+
+  let mode = '';   // 'new' | 'move' | 'resize'
+  let dir = '';
+  let anchor = null;
+  let base = null;
+
   shot.addEventListener('pointerdown', (evt) => {
     if (!s.selected) return;
     evt.preventDefault();
-    s.dragStart = toNorm(evt);
     try { shot.setPointerCapture(evt.pointerId); } catch { /* 合成事件没有真实 pointerId */ }
-    s.region = { ...s.dragStart, w: 0, h: 0 };
-    drawSel();
+
+    anchor = toNorm(evt);
+    base = { ...s.region };
+
+    const handle = sel.hidden ? '' : hitHandle(evt);
+    if (handle) {
+      mode = 'resize';
+      dir = handle;
+      shot.classList.add('resizing');
+    } else if (!sel.hidden && !isFullFrame() && insideSel(evt)) {
+      mode = 'move';
+      shot.classList.add('moving');
+    } else {
+      mode = 'new';
+      s.region = { x: anchor.x, y: anchor.y, w: 0, h: 0 };
+      drawSel();
+    }
   });
 
   shot.addEventListener('pointermove', (evt) => {
-    if (!s.dragStart) return;
+    if (!mode) return;
     const p = toNorm(evt);
-    s.region = rectOf(s.dragStart, p);
+    if (mode === 'new') {
+      s.region = rectOf(anchor, p);
+    } else if (mode === 'move') {
+      const nx = clamp01(Math.min(1 - base.w, Math.max(0, base.x + (p.x - anchor.x))));
+      const ny = clamp01(Math.min(1 - base.h, Math.max(0, base.y + (p.y - anchor.y))));
+      s.region = { x: nx, y: ny, w: base.w, h: base.h };
+    } else {
+      s.region = resizeRect(base, dir, p);
+    }
     drawSel();
   });
 
   const finish = (evt) => {
-    if (!s.dragStart) return;
-    const p = toNorm(evt);
-    const r = rectOf(s.dragStart, p);
-    s.dragStart = null;
+    if (!mode) return;
     try { shot.releasePointerCapture(evt.pointerId); } catch { /* ignore */ }
-    if (r.w < 0.004 || r.h < 0.004) {
-      // 基本等于单击 —— 保留原区域
-      s.region = { x: 0, y: 0, w: 1, h: 1 };
-    } else {
-      s.region = r;
+    if (mode === 'new' && (s.region.w < 0.004 || s.region.h < 0.004)) {
+      s.region = base; // 基本等于单击 —— 保留原区域
     }
+    mode = '';
+    dir = '';
+    shot.classList.remove('moving', 'resizing');
     drawSel();
     syncForm();
   };
 
   shot.addEventListener('pointerup', finish);
   shot.addEventListener('pointercancel', finish);
+}
+
+/** 按方向把手柄拖到 p 之后的新矩形（带最小尺寸，且不越界）。 */
+function resizeRect(base, dir, p) {
+  const MIN = 0.008;
+  let x = base.x;
+  let y = base.y;
+  let x2 = base.x + base.w;
+  let y2 = base.y + base.h;
+  if (dir.includes('w')) x = Math.min(p.x, x2 - MIN);
+  if (dir.includes('e')) x2 = Math.max(p.x, x + MIN);
+  if (dir.includes('n')) y = Math.min(p.y, y2 - MIN);
+  if (dir.includes('s')) y2 = Math.max(p.y, y + MIN);
+  x = clamp01(x);
+  y = clamp01(y);
+  x2 = clamp01(x2);
+  y2 = clamp01(y2);
+  return { x, y, w: x2 - x, h: y2 - y };
 }
 
 function rectOf(a, b) {
