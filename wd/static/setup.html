@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>编辑布局 · Window Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234c8dff'/%3E%3Crect x='3' y='4' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3Crect x='9.5' y='4' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='3' y='9' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='8' y='9' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/setup.css">
+</head>
+<body class="setup">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <h1>编辑布局</h1>
+      <span class="chip" id="platform">—</span>
+    </div>
+    <div class="actions">
+      <a class="btn" href="/">← 返回面板</a>
+    </div>
+  </header>
+
+  <div class="setup-wrap">
+    <!-- 左：窗口列表 -->
+    <aside class="pane windows">
+      <div class="pane-head">
+        <h2>窗口</h2>
+        <button id="btn-refresh" class="btn small">刷新</button>
+      </div>
+      <input id="win-filter" class="filter full" type="search" placeholder="按标题 / 进程过滤…" autocomplete="off">
+      <ul id="win-list" class="win-list"></ul>
+    </aside>
+
+    <!-- 中：框选 -->
+    <section class="pane stage">
+      <div class="pane-head">
+        <h2 id="stage-title">选一个窗口</h2>
+        <span class="hint" id="stage-hint">在截图上拖拽框出要显示的区域</span>
+      </div>
+      <div id="stage" class="stage-box">
+        <div class="stage-empty">左侧点选一个窗口，这里会显示它的截图</div>
+        <div id="shot" class="shot" hidden>
+          <img id="shot-img" alt="" draggable="false">
+          <div id="sel" class="sel" hidden></div>
+        </div>
+      </div>
+      <div class="coords" id="coords">区域：—</div>
+    </section>
+
+    <!-- 右：保存 -->
+    <aside class="pane editor">
+      <div class="pane-head"><h2>tile 设置</h2></div>
+      <form id="tile-form" class="form" autocomplete="off">
+        <label>ID
+          <input name="id" placeholder="tile-1" required pattern="[A-Za-z0-9_-]{1,64}">
+        </label>
+        <label>标题
+          <input name="title" placeholder="摄像头 1">
+        </label>
+        <div class="grid2">
+          <label>帧率
+            <input name="fps" type="number" min="0.5" max="30" step="0.5" value="8">
+          </label>
+          <label>质量
+            <input name="quality" type="number" min="30" max="95" step="1" value="80">
+          </label>
+        </div>
+        <label>抓取模式
+          <select name="capture">
+            <option value="window">window（窗口内容，遮挡也能抓）</option>
+            <option value="screen">screen（屏幕区域，要求窗口可见）</option>
+          </select>
+        </label>
+        <label class="check">
+          <input name="interactive" type="checkbox" checked>
+          允许在面板上点击回传
+        </label>
+        <label>标题匹配（正则，可留空）
+          <input name="title_regex" placeholder=".*Camera.*">
+        </label>
+        <div class="grid2">
+          <label>区域 x
+            <input name="rx" type="number" min="0" max="1" step="0.0001" value="0">
+          </label>
+          <label>区域 y
+            <input name="ry" type="number" min="0" max="1" step="0.0001" value="0">
+          </label>
+          <label>区域 w
+            <input name="rw" type="number" min="0" max="1" step="0.0001" value="1">
+          </label>
+          <label>区域 h
+            <input name="rh" type="number" min="0" max="1" step="0.0001" value="1">
+          </label>
+        </div>
+        <div class="form-actions">
+          <button type="submit" class="btn primary">保存 tile</button>
+          <button type="button" id="btn-clear" class="btn">清空</button>
+        </div>
+        <p class="hint" id="form-hint"></p>
+      </form>
+
+      <div class="pane-head sub"><h2>已有 tile</h2></div>
+      <ul id="tile-list" class="tile-list"></ul>
+    </aside>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/setup.js"></script>
+</body>
+</html>

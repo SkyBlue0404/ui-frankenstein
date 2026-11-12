@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Window Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234c8dff'/%3E%3Crect x='3' y='4' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3Crect x='9.5' y='4' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='3' y='9' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='8' y='9' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <h1>Window Dashboard</h1>
+      <span class="chip" id="platform">—</span>
+    </div>
+    <div class="actions">
+      <input id="filter" class="filter" type="search" placeholder="过滤…" autocomplete="off">
+      <button id="btn-lock" class="btn" title="锁定后点击不再回传原窗口">🔓 可操作</button>
+      <button id="btn-reload" class="btn" title="重新读取 config.json">重载配置</button>
+      <a class="btn primary" href="/setup">编辑布局</a>
+    </div>
+  </header>
+
+  <main id="grid" class="grid" aria-live="polite"></main>
+
+  <div id="empty" class="empty" hidden>
+    <p>还没有任何 tile。</p>
+    <p class="muted">去「编辑布局」里选一个窗口、框选区域，就会出现在这里。</p>
+    <a class="btn primary" href="/setup">去添加</a>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+fastapi>=0.110,<1.0
+uvicorn[standard]>=0.29
+Pillow>=10.0
+mss>=9.0
+psutil>=5.9
+python-xlib>=0.33; sys_platform == "linux"

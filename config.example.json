@@ -1,0 +1,32 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8777
+  },
+  "defaults": {
+    "fps": 8,
+    "quality": 80,
+    "capture": "window"
+  },
+  "layout": {
+    "min_tile_px": 260,
+    "gap_px": 10
+  },
+  "tiles": [
+    {
+      "id": "tile-1",
+      "title": "示例：记事本",
+      "window": {
+        "handle": "",
+        "title_regex": ".*记事本.*",
+        "app_regex": "",
+        "index": 0
+      },
+      "region": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.12 },
+      "fps": 8,
+      "quality": 80,
+      "capture": "window",
+      "interactive": true
+    }
+  ]
+}
