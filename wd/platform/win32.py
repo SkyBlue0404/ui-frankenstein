@@ -29,6 +29,7 @@ DWMWA_CLOAKED = 14
 WM_LBUTTONDOWN, WM_LBUTTONUP = 0x0201, 0x0202
 WM_RBUTTONDOWN, WM_RBUTTONUP = 0x0204, 0x0205
 WM_MBUTTONDOWN, WM_MBUTTONUP = 0x0207, 0x0208
+WM_MOUSEWHEEL = 0x020A
 MK_LBUTTON, MK_RBUTTON, MK_MBUTTON = 0x0001, 0x0002, 0x0010
 
 _DOWN = {1: WM_LBUTTONDOWN, 2: WM_MBUTTONDOWN, 3: WM_RBUTTONDOWN}
@@ -152,6 +153,7 @@ class Win32Backend(PlatformBackend):
     def __init__(self) -> None:
         _enable_dpi_awareness()
         self._lock = threading.RLock()
+        self.click_mode = "event"
         self._dwm = None
         try:
             self._dwm = ctypes.WinDLL("dwmapi")
@@ -364,6 +366,12 @@ class Win32Backend(PlatformBackend):
         hwnd = int(handle)
         sx, sy = self._screen_point(handle, px, py)
         with self._lock:
+            if self.click_mode == "event":
+                # PostMessage 投递 —— 不移动物理鼠标
+                for _ in range(2 if double else 1):
+                    self.post_click(handle, px, py, button)
+                    time.sleep(0.05)
+                return
             self._prepare_click(hwnd, sx, sy)
             for _ in range(2 if double else 1):
                 user32.mouse_event(_MEF_DOWN.get(button, _MEF_DOWN[1]), 0, 0, 0, 0)
@@ -374,9 +382,14 @@ class Win32Backend(PlatformBackend):
     def scroll(self, handle: str, px: int, py: int, delta: int) -> None:
         hwnd = int(handle)
         sx, sy = self._screen_point(handle, px, py)
+        steps = max(1, min(20, abs(int(delta))))
         with self._lock:
+            if self.click_mode == "event":
+                for _ in range(steps):
+                    self.post_scroll(handle, px, py, delta)
+                    time.sleep(0.01)
+                return
             self._prepare_click(hwnd, sx, sy)
-            steps = max(1, min(20, abs(int(delta))))
             for _ in range(steps):
                 user32.mouse_event(0x0800, 0, 0, 120 if delta > 0 else -120, 0)  # MOUSEEVENTF_WHEEL
                 time.sleep(0.01)
@@ -392,3 +405,12 @@ class Win32Backend(PlatformBackend):
         down, up, mk = _DOWN.get(button, WM_LBUTTONDOWN), _UP.get(button, WM_LBUTTONUP), _MK.get(button, MK_LBUTTON)
         user32.PostMessageW(wintypes.HWND(hwnd), down, mk, lparam)
         user32.PostMessageW(wintypes.HWND(hwnd), up, 0, lparam)
+
+    def post_scroll(self, handle: str, px: int, py: int, delta: int) -> None:
+        """PostMessage 投递滚轮。注意 WM_MOUSEWHEEL 的 lParam 是**屏幕坐标**。"""
+        hwnd = int(handle)
+        r = self.window_rect(handle)
+        sx, sy = r.x + int(px), r.y + int(py)
+        wparam = ((120 if delta > 0 else -120) & 0xFFFF) << 16
+        lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
+        user32.PostMessageW(wintypes.HWND(hwnd), WM_MOUSEWHEEL, wparam, lparam)

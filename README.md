@@ -76,7 +76,7 @@ python run.py --list-windows
 ```jsonc
 {
   "server":  { "host": "127.0.0.1", "port": 8777 },
-  "defaults":{ "fps": 8, "quality": 80, "capture": "window" },
+  "defaults":{ "fps": 8, "quality": 80, "capture": "window", "click_mode": "event" },
   "layout":  { "min_tile_px": 260, "gap_px": 10 },
   "tiles": [
     {
@@ -103,18 +103,20 @@ python run.py --list-windows
 
 ## 点击回传是怎么做的
 
-鼠标注入（X11 的 `XTest` / Windows 的 `mouse_event`）都是**屏幕坐标**的，点击永远落在
-最上层的那个窗口上。所以面板上的每一次点击都会：
+**默认 `click_mode: "event"`——不移动你的鼠标。** 事件直接投递给目标窗口
+（X11 用 `XSendEvent`，Windows 用 `PostMessage`），物理光标原地不动，
+所以贴图窗口可以放在屏幕任意角落，点它不会把鼠标拽到原窗口去。
 
-1. 先把指针移到目标窗口的对应像素位置；
-2. 检查那个位置最上层是不是目标窗口（`XQueryPointer` / `WindowFromPoint`）
-   - **是** → 直接点，零延迟、无闪烁；
-   - **否**（被浏览器/编辑器挡住了）→ 先把目标窗口抬到最前，等 WM 完成 Z 序重排再点；
-3. 如果第 2 步动过焦点，点完再把原来的活动窗口还原（面板不会跑到后面去）。
+GTK / Qt / Electron / 大部分 Win32 程序都接受合成事件；少数自绘 UI（部分游戏、
+某些定制控件）会忽略，这时把它改成 `"physical"` 走物理注入兜底：
+
+```jsonc
+"defaults": { "click_mode": "physical" }   // 会把鼠标移到目标位置再点
+```
 
 > ⚠️ 已知限制：被 **override-redirect 窗口**（全屏浮层、部分游戏/播放器的全屏层）遮挡时，
-> 这类窗口不受 WM 管理，抬不起来，点击会被它吃掉。这种情况请把工具窗口挪开，或用
-> `"interactive": false` 只做监控。
+> 这类窗口不受 WM 管理，抬不起来。`"event"` 模式下不受影响（直接投递），
+> `"physical"` 模式下会点不中。
 
 ## 抓取模式怎么选
 

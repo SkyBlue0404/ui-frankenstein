@@ -37,6 +37,9 @@ class X11Backend(PlatformBackend):
         self._root = self._dpy.screen().root
         self._lock = threading.RLock()  # Xlib 连接不是线程安全的
         self._local = threading.local()  # mss 实例不能跨线程共享
+        # "event"    = XSendEvent 投递（不动鼠标，默认）
+        # "physical" = warp + XTest 物理注入（兼容自绘 UI，但会拽动鼠标）
+        self.click_mode = "event"
         self._atom_net_name = self._dpy.intern_atom("_NET_WM_NAME")
         self._atom_utf8 = self._dpy.intern_atom("UTF8_STRING")
         self._atom_client_list = self._dpy.intern_atom("_NET_CLIENT_LIST")
@@ -201,6 +204,88 @@ class X11Backend(PlatformBackend):
             pos = self._root.translate_coords(w, int(px), int(py))
             return int(pos.x), int(pos.y)
 
+    def _send_button(
+        self, win: Any, press: bool, detail: int,
+        cx: int, cy: int, sx: int, sy: int,
+    ) -> None:
+        """用 XSendEvent 把按钮事件直接投递给目标窗口。
+
+        关键点：**完全不移动物理鼠标**。XTest 的物理注入必须先把指针移到目标
+        位置，用户会看到鼠标被拽走；XSendEvent 走的是纯事件通道，光标原地不动。
+        GTK / Qt / Electron 都会对事件自己做内部命中测试，所以发到顶层客户端
+        窗口即可，不需要精确定位到子控件。
+        """
+        cls = event.ButtonPress if press else event.ButtonRelease
+        ev = cls(
+            time=X.CurrentTime,
+            root=self._root,
+            window=win,
+            same_screen=1,
+            child=X.NONE,
+            root_x=sx,
+            root_y=sy,
+            event_x=cx,
+            event_y=cy,
+            state=0,
+            detail=detail,
+        )
+        mask = X.ButtonPressMask if press else X.ButtonReleaseMask
+        win.send_event(ev, event_mask=mask, propagate=False)
+        self._dpy.sync()
+
+    def click(self, handle: str, px: int, py: int, button: int = 1, double: bool = False) -> None:
+        xbtn = _BUTTON_MAP.get(button, 1)
+        with self._lock:
+            win = self._dpy.create_resource_object("window", int(handle))
+
+            if self.click_mode == "event":
+                sx, sy = self._to_screen(handle, px, py)
+                for _ in range(2 if double else 1):
+                    self._send_button(win, True, xbtn, px, py, sx, sy)
+                    time.sleep(0.02)
+                    self._send_button(win, False, xbtn, px, py, sx, sy)
+                    time.sleep(0.03)
+                return
+
+            # 物理注入兜底：某些自绘 UI 会忽略合成事件
+            sx, sy = self._to_screen(handle, px, py)
+            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
+            self._raw_click(sx, sy, xbtn, double)
+            if prev and prev != int(handle):
+                try:
+                    self._activate(self._dpy.create_resource_object("window", prev))
+                except Exception:
+                    pass
+
+    def scroll(self, handle: str, px: int, py: int, delta: int) -> None:
+        xbtn = 4 if delta > 0 else 5
+        steps = min(20, max(1, abs(int(delta))))
+        with self._lock:
+            win = self._dpy.create_resource_object("window", int(handle))
+
+            if self.click_mode == "event":
+                sx, sy = self._to_screen(handle, px, py)
+                for _ in range(steps):
+                    self._send_button(win, True, xbtn, px, py, sx, sy)
+                    self._send_button(win, False, xbtn, px, py, sx, sy)
+                    time.sleep(0.01)
+                return
+
+            sx, sy = self._to_screen(handle, px, py)
+            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
+            self._root.warp_pointer(sx, sy)
+            self._dpy.sync()
+            for _ in range(steps):
+                xtest.fake_input(self._dpy, X.ButtonPress, xbtn)
+                xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
+                self._dpy.sync()
+                time.sleep(0.01)
+            if prev and prev != int(handle):
+                try:
+                    self._activate(self._dpy.create_resource_object("window", prev))
+                except Exception:
+                    pass
+
     def _toplevel(self, win: Any) -> Any:
         """找到窗口的顶层 frame（GNOME 等 reparenting WM 下客户区外面还套了一层）。"""
         cur = win
@@ -306,35 +391,3 @@ class X11Backend(PlatformBackend):
             xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
             self._dpy.sync()
             time.sleep(0.05)
-
-    def click(self, handle: str, px: int, py: int, button: int = 1, double: bool = False) -> None:
-        sx, sy = self._to_screen(handle, px, py)
-        xbtn = _BUTTON_MAP.get(button, 1)
-        with self._lock:
-            win = self._dpy.create_resource_object("window", int(handle))
-            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
-            self._raw_click(sx, sy, xbtn, double)
-            if prev and prev != int(handle):
-                try:
-                    self._activate(self._dpy.create_resource_object("window", prev))
-                except Exception:
-                    pass
-
-    def scroll(self, handle: str, px: int, py: int, delta: int) -> None:
-        sx, sy = self._to_screen(handle, px, py)
-        xbtn = 4 if delta > 0 else 5
-        with self._lock:
-            win = self._dpy.create_resource_object("window", int(handle))
-            prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
-            self._root.warp_pointer(sx, sy)
-            self._dpy.sync()
-            for _ in range(min(20, max(1, abs(int(delta))))):
-                xtest.fake_input(self._dpy, X.ButtonPress, xbtn)
-                xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
-                self._dpy.sync()
-                time.sleep(0.01)
-            if prev and prev != int(handle):
-                try:
-                    self._activate(self._dpy.create_resource_object("window", prev))
-                except Exception:
-                    pass

@@ -47,6 +47,7 @@ class Runtime:
     def __init__(self, cfg: Config) -> None:
         self.cfg = cfg
         self.backend = get_backend()
+        self.backend.click_mode = str(cfg.defaults.get("click_mode", "event"))
         self.workers: dict[str, TileWorker] = {}
         self.lock = threading.RLock()
 

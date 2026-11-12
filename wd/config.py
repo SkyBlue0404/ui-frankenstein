@@ -10,7 +10,7 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8777},
-    "defaults": {"fps": 8, "quality": 80, "capture": "window"},
+    "defaults": {"fps": 8, "quality": 80, "capture": "window", "click_mode": "event"},
     "layout": {"min_tile_px": 260, "gap_px": 10},
     "tiles": [],
 }
