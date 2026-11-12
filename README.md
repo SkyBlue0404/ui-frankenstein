@@ -107,16 +107,21 @@ python run.py --list-windows
 （X11 用 `XSendEvent`，Windows 用 `PostMessage`），物理光标原地不动，
 所以贴图窗口可以放在屏幕任意角落，点它不会把鼠标拽到原窗口去。
 
-GTK / Qt / Electron / 大部分 Win32 程序都接受合成事件；少数自绘 UI（部分游戏、
-某些定制控件）会忽略，这时把它改成 `"physical"` 走物理注入兜底：
+点击后会自动**还原窗口的堆叠位置和输入焦点**，所以它不会停在最前面。
 
-```jsonc
-"defaults": { "click_mode": "physical" }   // 会把鼠标移到目标位置再点
-```
-
-> ⚠️ 已知限制：被 **override-redirect 窗口**（全屏浮层、部分游戏/播放器的全屏层）遮挡时，
-> 这类窗口不受 WM 管理，抬不起来。`"event"` 模式下不受影响（直接投递），
-> `"physical"` 模式下会点不中。
+> ⚠️ **一个绕不过去的限制**：Chromium / Electron 程序（VS Code、Chrome 等）
+> **只处理「自己处于激活状态」时的合成事件**，不激活就完全忽略。而 X11 里
+> 「激活」必然伴随一次 raise（Mutter 会强制 focus 与 raise 一致，用
+> `XSetInputFocus` 会被它立刻改回去）。所以点这类程序时，目标窗口会**闪一下
+> （约 200ms）再回到原位**——点击能生效，但它不会停在前台。
+>
+> 如果你的程序是 GTK / Qt / 传统 Win32，通常不会有这个闪烁。
+> 少数自绘 UI 会彻底忽略合成事件，这时把 `click_mode` 改成 `"physical"`
+> 走物理注入兜底（会把鼠标移到目标位置再点）：
+>
+> ```jsonc
+> "defaults": { "click_mode": "physical" }
+> ```
 
 ## 抓取模式怎么选
 

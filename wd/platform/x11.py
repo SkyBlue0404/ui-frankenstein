@@ -21,6 +21,9 @@ _BUTTON_MAP = {1: 1, 2: 2, 3: 3}  # our button -> X button
 # 否则点击会打到浏览器/编辑器上（而不是被拼接的工具窗口）。
 _ACTIVATE_BEFORE_CLICK = True
 _RESTORE_FOCUS_AFTER_CLICK = True
+# 很多程序（GTK / Qt / Electron）收到 ButtonPress 后会主动把自己 raise 到最前
+# 并抢焦点。用户要的是「后台操作」，所以点完必须把它塞回原来的堆叠位置。
+_RESTORE_STACK_AFTER_CLICK = True
 
 
 class X11Backend(PlatformBackend):
@@ -233,22 +236,57 @@ class X11Backend(PlatformBackend):
         win.send_event(ev, event_mask=mask, propagate=False)
         self._dpy.sync()
 
+    def _stack_above(self, frame: Any) -> tuple[int | None, bool]:
+        """记录 frame 在堆叠顺序里「上面的那个兄弟」。
+
+        还原时把 frame 插回这个兄弟的下面，就回到原来的层号。
+        如果 frame 已经是最上层，就没有「被抬起来」这回事，不用还原。
+        """
+        try:
+            kids = self._root.query_tree().children
+            ids = [c.id for c in kids]
+            if frame.id not in ids:
+                return None, False
+            i = ids.index(frame.id)
+            if i >= len(kids) - 1:
+                return None, False
+            return kids[i + 1].id, True
+        except Exception:
+            return None, False
+
+    def _restore_stack(self, frame: Any, above_id: int | None, ok: bool) -> None:
+        """把 window 插回到 above_id 的下面。"""
+        if not ok:
+            return
+        try:
+            sibling = self._dpy.create_resource_object("window", int(above_id))
+            frame.configure(stack_mode=X.Below, sibling=sibling)
+            self._dpy.sync()
+        except Exception:
+            pass
+
     def click(self, handle: str, px: int, py: int, button: int = 1, double: bool = False) -> None:
         xbtn = _BUTTON_MAP.get(button, 1)
         with self._lock:
             win = self._dpy.create_resource_object("window", int(handle))
+            sx, sy = self._to_screen(handle, px, py)
 
             if self.click_mode == "event":
-                sx, sy = self._to_screen(handle, px, py)
+                frame = self._toplevel(win)
+                above, stack_ok = self._stack_above(frame)
+                prev = self._active_window() if _RESTORE_FOCUS_AFTER_CLICK else None
+
+                self._ensure_active(win, frame, above, stack_ok)
+
                 for _ in range(2 if double else 1):
                     self._send_button(win, True, xbtn, px, py, sx, sy)
                     time.sleep(0.02)
                     self._send_button(win, False, xbtn, px, py, sx, sy)
                     time.sleep(0.03)
+                self._restore_after_click(frame, above, stack_ok, prev, int(handle))
                 return
 
             # 物理注入兜底：某些自绘 UI 会忽略合成事件
-            sx, sy = self._to_screen(handle, px, py)
             prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
             self._raw_click(sx, sy, xbtn, double)
             if prev and prev != int(handle):
@@ -257,18 +295,67 @@ class X11Backend(PlatformBackend):
                 except Exception:
                     pass
 
+    def _ensure_active(
+        self, win: Any, frame: Any, above_id: int | None, stack_ok: bool
+    ) -> None:
+        """保证目标窗口处于激活状态，然后立刻把它塞回原堆叠位置。
+
+        Chromium / Electron（VS Code、Chrome 等）**只处理「自己处于激活状态」
+        时的合成事件**，不激活就完全忽略。而激活必然伴随一次 raise，所以这里
+        「激活 → 马上塞回去」，把窗口闪到前台的时间压到最短（约 0.25s），
+        既让点击生效，又不会让它停在最前面。
+        """
+        if self._is_focused(win):
+            return  # 本来就激活，不闪
+        self._activate(win)
+        time.sleep(0.18)  # 等 WM 把激活请求处理完
+        self._restore_stack(frame, above_id, stack_ok)
+        time.sleep(0.06)
+
+    def _restore_after_click(
+        self, frame: Any, above_id: int | None, stack_ok: bool, prev: int | None, handle: int
+    ) -> None:
+        """点击后把被程序自己抬起来的窗口塞回去，并还原输入焦点。
+
+        程序处理点击是**异步**的：它可能在 ButtonPress 之后几十毫秒才去
+        `_NET_ACTIVE_WINDOW` / raise，只还原一次会被它盖掉。所以这里做
+        「还原 → 校验 → 不稳就再来一轮」的收敛循环。
+        """
+        if not (_RESTORE_STACK_AFTER_CLICK or _RESTORE_FOCUS_AFTER_CLICK):
+            return
+
+        want_focus = _RESTORE_FOCUS_AFTER_CLICK and prev is not None and prev != handle
+        for _ in range(4):
+            time.sleep(0.07)
+            if _RESTORE_STACK_AFTER_CLICK:
+                self._restore_stack(frame, above_id, stack_ok)
+            if want_focus and self._active_window() != prev:
+                try:
+                    self._activate(self._dpy.create_resource_object("window", int(prev)))
+                except Exception:
+                    pass
+            if not want_focus or self._active_window() == prev:
+                break
+
     def scroll(self, handle: str, px: int, py: int, delta: int) -> None:
         xbtn = 4 if delta > 0 else 5
         steps = min(20, max(1, abs(int(delta))))
         with self._lock:
             win = self._dpy.create_resource_object("window", int(handle))
+            sx, sy = self._to_screen(handle, px, py)
 
             if self.click_mode == "event":
-                sx, sy = self._to_screen(handle, px, py)
+                frame = self._toplevel(win)
+                above, stack_ok = self._stack_above(frame)
+                prev = self._active_window() if _RESTORE_FOCUS_AFTER_CLICK else None
+
+                self._ensure_active(win, frame, above, stack_ok)
+
                 for _ in range(steps):
                     self._send_button(win, True, xbtn, px, py, sx, sy)
                     self._send_button(win, False, xbtn, px, py, sx, sy)
                     time.sleep(0.01)
+                self._restore_after_click(frame, above, stack_ok, prev, int(handle))
                 return
 
             sx, sy = self._to_screen(handle, px, py)
