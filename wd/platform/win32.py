@@ -129,8 +129,30 @@ user32.BringWindowToTop.argtypes = [wintypes.HWND]
 user32.BringWindowToTop.restype = wintypes.BOOL
 user32.GetForegroundWindow.argtypes = []
 user32.GetForegroundWindow.restype = wintypes.HWND
+user32.RegisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.UINT, wintypes.UINT]
+user32.RegisterHotKey.restype = wintypes.BOOL
+user32.UnregisterHotKey.argtypes = [wintypes.HWND, ctypes.c_int]
+user32.UnregisterHotKey.restype = wintypes.BOOL
+user32.GetMessageW.argtypes = [ctypes.POINTER(wintypes.MSG), wintypes.HWND, wintypes.UINT, wintypes.UINT]
+user32.GetMessageW.restype = ctypes.c_int
+user32.VkKeyScanW.argtypes = [wintypes.WCHAR]
+user32.VkKeyScanW.restype = ctypes.c_short
+user32.PostThreadMessageW.argtypes = [wintypes.DWORD, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+user32.PostThreadMessageW.restype = wintypes.BOOL
+
+kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+kernel32.GetCurrentThreadId.argtypes = []
+kernel32.GetCurrentThreadId.restype = wintypes.DWORD
 
 GA_ROOT = 2
+WM_HOTKEY = 0x0312
+
+_MOD_ALIASES = {
+    "ctrl": 0x0002, "control": 0x0002,
+    "alt": 0x0001,
+    "shift": 0x0004,
+    "super": 0x0008, "win": 0x0008,
+}
 
 
 def _enable_dpi_awareness() -> None:
@@ -250,6 +272,21 @@ class Win32Backend(PlatformBackend):
 
         items.sort(key=lambda i: i.title.lower())
         return items
+
+    def focused_window(self) -> WindowInfo | None:
+        """当前前台窗口（模式 A 快捷键截取用）。"""
+        try:
+            fg = user32.GetForegroundWindow()
+            if not fg:
+                return None
+            fg_root = user32.GetAncestor(fg, GA_ROOT)
+            for w in self.list_windows():
+                h = wintypes.HWND(int(w.handle))
+                if h == fg or user32.GetAncestor(h, GA_ROOT) == fg_root:
+                    return w
+        except Exception:
+            pass
+        return None
 
     # ---- 抓取 ----
 
@@ -414,3 +451,70 @@ class Win32Backend(PlatformBackend):
         wparam = ((120 if delta > 0 else -120) & 0xFFFF) << 16
         lparam = ((sy & 0xFFFF) << 16) | (sx & 0xFFFF)
         user32.PostMessageW(wintypes.HWND(hwnd), WM_MOUSEWHEEL, wparam, lparam)
+
+
+# ---------------------------------------------------------------------------
+# 全局快捷键
+# ---------------------------------------------------------------------------
+
+
+def _vk_for(key: str) -> int:
+    """"p" -> 'P' 的虚拟键码；单字符走 VkKeyScanW。"""
+    if len(key) != 1:
+        return 0
+    scan = user32.VkKeyScanW(wintypes.WCHAR(key))
+    if scan == -1:
+        return 0
+    return scan & 0xFF
+
+
+class HotkeyListener(threading.Thread):
+    """Windows 全局快捷键（RegisterHotKey + 消息循环）。"""
+
+    def __init__(self, callback: Any, hotkey: str = "ctrl+alt+p") -> None:
+        super().__init__(daemon=True, name="hotkey")
+        self._cb = callback
+        self._hotkey = hotkey
+        self._stop = threading.Event()
+        self._id = 0xB00B
+        self.ok = False
+        self._thread_id = 0
+
+    def run(self) -> None:
+        self._thread_id = kernel32.GetCurrentThreadId()
+        parts = [p.strip().lower() for p in str(self._hotkey).split("+") if p.strip()]
+        mods = 0
+        key = ""
+        for part in parts:
+            if part in _MOD_ALIASES:
+                mods |= _MOD_ALIASES[part]
+            else:
+                key = part
+        vk = _vk_for(key)
+        if not vk:
+            print(f"[!] 无法解析快捷键: {self._hotkey}")
+            return
+        if not user32.RegisterHotKey(None, self._id, mods, vk):
+            print(f"[!] RegisterHotKey 失败（可能被占用）: {self._hotkey}")
+            return
+        self.ok = True
+        print(f"[i] 全局快捷键已注册: {self._hotkey.upper()}")
+
+        msg = wintypes.MSG()
+        while not self._stop.is_set():
+            ret = user32.GetMessageW(ctypes.byref(msg), None, 0, 0)
+            if ret == 0 or ret == -1:
+                break
+            if msg.message == WM_HOTKEY and msg.wParam == self._id:
+                try:
+                    self._cb()
+                except Exception as exc:  # noqa: BLE001
+                    print(f"[!] 快捷键回调失败: {exc}")
+        user32.UnregisterHotKey(None, self._id)
+
+    def stop(self) -> None:
+        self._stop.set()
+        try:
+            user32.PostThreadMessageW(self._thread_id, 0x0012, 0, 0)  # WM_QUIT
+        except Exception:  # noqa: BLE001
+            pass

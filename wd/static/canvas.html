@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>画布模式 · Window Dashboard</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%234c8dff'/%3E%3Crect x='3' y='4' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3Crect x='9.5' y='4' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='3' y='9' width='3.5' height='3.5' rx='1' fill='%23fff' opacity='.7'/%3E%3Crect x='8' y='9' width='5' height='3.5' rx='1' fill='%23fff'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/canvas.css">
+</head>
+<body class="canvas-mode">
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true"></span>
+      <h1>Window Dashboard</h1>
+      <nav class="mode-switch" aria-label="模式">
+        <a href="/pins">贴图</a>
+        <a href="/" class="on">画布</a>
+      </nav>
+      <span class="chip" id="platform">—</span>
+    </div>
+    <div class="actions">
+      <input id="filter" class="filter" type="search" placeholder="过滤…" autocomplete="off">
+      <button id="btn-lock" class="btn" title="锁定后点击不再回传原窗口">🔓 可操作</button>
+      <button id="btn-arrange" class="btn" title="按网格重新排列所有面板">自动排列</button>
+      <button id="btn-add" class="btn primary">＋ 添加窗口</button>
+    </div>
+  </header>
+
+  <main id="canvas" class="canvas" aria-live="polite"></main>
+
+  <div id="empty" class="canvas-empty" hidden>
+    <p>画布还是空的。</p>
+    <p class="muted">点「＋ 添加窗口」，选一个进程的某一块区域放上来。</p>
+    <button class="btn primary" id="btn-add-2">＋ 添加窗口</button>
+  </div>
+
+  <!-- 添加窗口弹窗 -->
+  <div id="modal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head">
+        <h2>添加窗口</h2>
+        <button class="btn" data-close="1">关闭</button>
+      </div>
+      <div class="modal-body">
+        <div class="col">
+          <div class="col-head">进程窗口</div>
+          <input id="win-filter" class="filter" style="margin:8px;" type="search" placeholder="过滤标题 / 进程…" autocomplete="off">
+          <ul id="win-list" class="win-list-compact"></ul>
+        </div>
+        <div class="col">
+          <div class="col-head" id="pick-title">选一个窗口</div>
+          <div class="pick-stage" id="pick-stage">
+            <div class="pick-empty">左侧点选一个窗口，这里显示它的截图</div>
+            <div id="pick-shot" class="pick-shot" hidden>
+              <img id="pick-img" alt="" draggable="false">
+              <div id="pick-sel" class="pick-sel" hidden></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot">
+        <span class="hint" id="pick-hint">在截图上拖拽框出要显示的区域</span>
+        <span class="grow"></span>
+        <button class="btn" data-close="1">取消</button>
+        <button class="btn primary" id="btn-create" disabled>创建面板</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/canvas.js"></script>
+</body>
+</html>

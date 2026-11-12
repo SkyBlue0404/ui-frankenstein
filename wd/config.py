@@ -10,7 +10,13 @@ from typing import Any
 
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8777},
-    "defaults": {"fps": 8, "quality": 80, "capture": "window", "click_mode": "event"},
+    "defaults": {
+        "fps": 8,
+        "quality": 80,
+        "capture": "window",
+        "click_mode": "event",
+        "hotkey": "ctrl+alt+p",
+    },
     "layout": {"min_tile_px": 260, "gap_px": 10},
     "tiles": [],
 }
@@ -164,6 +170,20 @@ class Config:
         if capture not in ("window", "screen"):
             raise ConfigError(f"{tid}: capture must be 'window' or 'screen'")
 
+        # 画布模式下的自由位置；None = 还没摆放过，由前端自动布局
+        canvas = tile.get("canvas")
+        canvas_norm = None
+        if isinstance(canvas, dict):
+            try:
+                canvas_norm = {
+                    "x": float(canvas.get("x", 40)),
+                    "y": float(canvas.get("y", 40)),
+                    "w": max(40.0, float(canvas.get("w", 480))),
+                    "h": max(20.0, float(canvas.get("h", 300))),
+                }
+            except (TypeError, ValueError):
+                canvas_norm = None
+
         return {
             "id": tid,
             "title": str(tile.get("title") or tid),
@@ -173,4 +193,5 @@ class Config:
             "quality": max(30, min(95, int(tile.get("quality") or defaults.get("quality", 80)))),
             "capture": capture,
             "interactive": bool(tile.get("interactive", True)),
+            "canvas": canvas_norm,
         }

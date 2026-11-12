@@ -18,4 +18,15 @@ def get_backend() -> PlatformBackend:
     raise RuntimeError(f"unsupported platform: {sys.platform}")
 
 
-__all__ = ["PlatformBackend", "get_backend"]
+def get_hotkey_listener(callback, hotkey: str):
+    """按当前平台返回全局快捷键监听器；不支持的平台返回 None。"""
+    if sys.platform.startswith("win"):
+        from .win32 import HotkeyListener as _HK
+    elif sys.platform.startswith("linux"):
+        from .x11 import HotkeyListener as _HK
+    else:
+        return None
+    return _HK(callback, hotkey)
+
+
+__all__ = ["PlatformBackend", "get_backend", "get_hotkey_listener"]

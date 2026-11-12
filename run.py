@@ -74,6 +74,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--scale", type=float, default=1.0, help="贴图缩放倍数（默认 1.0）")
     parser.add_argument("--pin-x", type=int, default=None, help="贴图窗口初始 X 坐标")
     parser.add_argument("--pin-y", type=int, default=None, help="贴图窗口初始 Y 坐标")
+    parser.add_argument("--own-tile", action="store_true",
+                        help="（内部用）关窗时回收服务端的瞬时 tile")
     args = parser.parse_args(argv)
 
     if args.list_windows:
@@ -82,7 +84,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.pin:
         from wd.pin import run_pin
 
-        return run_pin(args.server, args.pin, scale=args.scale, x=args.pin_x, y=args.pin_y)
+        return run_pin(
+            args.server, args.pin, scale=args.scale,
+            x=args.pin_x, y=args.pin_y, own_tile=args.own_tile,
+        )
 
     config_path = Path(args.config)
     if not config_path.exists():

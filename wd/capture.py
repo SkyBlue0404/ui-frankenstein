@@ -186,6 +186,7 @@ class TileWorker(threading.Thread):
                 "window_size": list(self._win_size),
                 "handle": self._handle,
                 "interactive": bool(self.cfg.get("interactive", True)),
+                "canvas": self.cfg.get("canvas"),
             }
 
     def latest_size(self) -> tuple[tuple[int, int], tuple[int, int]]:

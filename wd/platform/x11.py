@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import select
+import sys
 import threading
 import time
 from typing import Any
@@ -10,7 +12,7 @@ from ..models import Rect, WindowInfo
 from .base import PlatformBackend
 
 # 这些 import 只在 Linux 上有意义，放在模块级由 platform/__init__ 懒加载
-from Xlib import X, display  # type: ignore
+from Xlib import X, XK, display  # type: ignore
 from Xlib.ext import xtest  # type: ignore
 from Xlib.protocol import event  # type: ignore
 
@@ -161,6 +163,32 @@ class X11Backend(PlatformBackend):
                     continue
         items.sort(key=lambda i: i.title.lower())
         return items
+
+    def focused_window(self) -> WindowInfo | None:
+        """当前聚焦的窗口（模式 A 快捷键截取用）。
+
+        会被快捷键线程调用，而 Xlib 连接不是线程安全的，所以整段加锁。
+        """
+        try:
+            with self._lock:
+                active = self._active_window()
+                if active is None:
+                    return None
+                wins = self.list_windows()
+                for w in wins:
+                    if int(w.handle) == active:
+                        return w
+                # _NET_ACTIVE_WINDOW 有时给的是 frame 而不是 client
+                for w in wins:
+                    try:
+                        win = self._dpy.create_resource_object("window", int(w.handle))
+                        if self._toplevel(win).id == active:
+                            return w
+                    except Exception:
+                        continue
+        except Exception:
+            pass
+        return None
 
     # ---- 抓取 ----
 
@@ -478,3 +506,111 @@ class X11Backend(PlatformBackend):
             xtest.fake_input(self._dpy, X.ButtonRelease, xbtn)
             self._dpy.sync()
             time.sleep(0.05)
+
+
+# ---------------------------------------------------------------------------
+# 全局快捷键
+# ---------------------------------------------------------------------------
+
+# 默认 Ctrl+Alt+P。Mod1Mask 在 X11 上就是 Alt。
+DEFAULT_HOTKEY = "ctrl+alt+p"
+_MOD_ALIASES = {
+    "ctrl": X.ControlMask,
+    "control": X.ControlMask,
+    "alt": X.Mod1Mask,
+    "shift": X.ShiftMask,
+    "super": X.Mod4Mask,
+    "win": X.Mod4Mask,
+}
+
+
+def parse_hotkey(spec: str) -> tuple[str, int] | None:
+    """"ctrl+alt+p" -> ("p", ControlMask|Mod1Mask)。解析失败返回 None。"""
+    parts = [p.strip().lower() for p in str(spec).split("+") if p.strip()]
+    if not parts:
+        return None
+    mods = 0
+    key = None
+    for part in parts:
+        if part in _MOD_ALIASES:
+            mods |= _MOD_ALIASES[part]
+        else:
+            key = part
+    if not key:
+        return None
+    return key, mods
+
+
+class HotkeyListener(threading.Thread):
+    """全局快捷键监听。
+
+    用**独立的 X 连接**，避免和抓帧线程抢同一个 Display（Xlib 不是线程安全的）。
+    快捷键按下后回调在监听线程里执行，回调内部要自己保证线程安全。
+    """
+
+    def __init__(self, callback: Any, hotkey: str = DEFAULT_HOTKEY) -> None:
+        super().__init__(daemon=True, name="hotkey")
+        self._cb = callback
+        self._hotkey = hotkey
+        self._stop = threading.Event()
+        self._dpy = display.Display()
+        self._root = self._dpy.screen().root
+        self.ok = False
+
+    def run(self) -> None:
+        parsed = parse_hotkey(self._hotkey)
+        if not parsed:
+            print(f"[!] 无法解析快捷键: {self._hotkey}", file=sys.stderr)
+            return
+        key_name, mods = parsed
+        keycode = self._dpy.keysym_to_keycode(XK.string_to_keysym(key_name))
+        if not keycode:
+            print(f"[!] 找不到键位: {key_name}", file=sys.stderr)
+            return
+
+        # CapsLock / NumLock 会改动 modifier 状态位，这几种组合都要 grab
+        grabbed = 0
+        for extra in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
+            try:
+                self._root.grab_key(
+                    keycode, mods | extra, True, X.GrabModeAsync, X.GrabModeAsync
+                )
+                grabbed += 1
+            except Exception as exc:  # noqa: BLE001
+                print(f"[!] grab_key 失败: {exc}", file=sys.stderr)
+        self._dpy.sync()
+        self.ok = grabbed > 0
+        if not self.ok:
+            return
+        print(f"[i] 全局快捷键已注册: {self._hotkey.upper()}")
+
+        try:
+            fd = self._dpy.fileno()
+        except Exception:  # noqa: BLE001
+            return
+
+        while not self._stop.is_set():
+            try:
+                ready, _, _ = select.select([fd], [], [], 0.2)
+            except (OSError, ValueError):
+                break
+            if not ready:
+                continue
+            try:
+                while self._dpy.pending_events():
+                    evt = self._dpy.next_event()
+                    if evt.type == X.KeyPress:
+                        try:
+                            self._cb()
+                        except Exception as exc:  # noqa: BLE001
+                            print(f"[!] 快捷键回调失败: {exc}", file=sys.stderr)
+            except Exception:  # noqa: BLE001
+                break
+
+        try:
+            self._dpy.close()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def stop(self) -> None:
+        self._stop.set()

@@ -30,6 +30,10 @@ class PlatformBackend(ABC):
     def list_windows(self) -> list[WindowInfo]:
         """列出当前所有可见的顶层窗口。"""
 
+    def focused_window(self) -> WindowInfo | None:
+        """当前拥有输入焦点的窗口（模式 A 的快捷键截取用）。"""
+        return None
+
     # ---- 抓取 ----
 
     @abstractmethod

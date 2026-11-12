@@ -4,6 +4,7 @@ import io
 import subprocess
 import sys
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -14,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from .capture import TileWorker
 from .config import Config
-from .platform import get_backend
+from .platform import get_backend, get_hotkey_listener
 
 STATIC_DIR = Path(__file__).parent / "static"
 _BOUNDARY = b"--frame\r\n"
@@ -38,6 +39,13 @@ class ReorderBody(BaseModel):
     ids: list[str]
 
 
+class CanvasBody(BaseModel):
+    x: float = 40.0
+    y: float = 40.0
+    w: float = 480.0
+    h: float = 300.0
+
+
 # ---------------------------------------------------------------------------
 # 运行时状态
 # ---------------------------------------------------------------------------
@@ -49,12 +57,21 @@ class Runtime:
         self.backend = get_backend()
         self.backend.click_mode = str(cfg.defaults.get("click_mode", "event"))
         self.workers: dict[str, TileWorker] = {}
+        # 模式 A 的瞬时 tile：快捷键截取的窗口，不写进配置文件
+        self.transient: dict[str, dict[str, Any]] = {}
+        self.hotkey: Any = None
         self.lock = threading.RLock()
+
+    # ---- tile 集合 ----
+
+    def all_tiles(self) -> list[dict[str, Any]]:
+        with self.lock:
+            return list(self.cfg.tiles) + list(self.transient.values())
 
     def start(self) -> None:
         with self.lock:
             self._stop_all()
-            for tile in self.cfg.tiles:
+            for tile in self.all_tiles():
                 worker = TileWorker(tile, self.backend)
                 worker.start()
                 self.workers[tile["id"]] = worker
@@ -70,7 +87,7 @@ class Runtime:
     def sync(self) -> None:
         """增量同步：只重启配置变了的 tile，其余画面流保持不断。"""
         with self.lock:
-            wanted = {t["id"]: t for t in self.cfg.tiles}
+            wanted = {t["id"]: t for t in self.all_tiles()}
             for tid, worker in list(self.workers.items()):
                 if tid not in wanted or worker.cfg != wanted[tid]:
                     worker.stop()
@@ -81,6 +98,51 @@ class Runtime:
                     worker.start()
                     self.workers[tid] = worker
 
+    # ---- 瞬时 tile（模式 A） ----
+
+    def add_transient(self, handle: str, title: str) -> dict[str, Any]:
+        with self.lock:
+            base = f"pin-{int(time.time() * 1000) % 1_000_000}"
+            tid = base
+            n = 1
+            while tid in self.transient or self.cfg.tile(tid) is not None:
+                n += 1
+                tid = f"{base}-{n}"
+
+            tile = {
+                "id": tid,
+                "title": title or tid,
+                "window": {
+                    "handle": str(handle),
+                    "title_regex": "",
+                    "app_regex": "",
+                    "index": 0,
+                },
+                "region": {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
+                "fps": float(self.cfg.defaults.get("fps", 8)),
+                "quality": int(self.cfg.defaults.get("quality", 80)),
+                "capture": str(self.cfg.defaults.get("capture", "window")),
+                "interactive": True,
+                "canvas": None,
+            }
+            self.transient[tid] = tile
+            worker = TileWorker(tile, self.backend)
+            worker.start()
+            self.workers[tid] = worker
+            return tile
+
+    def remove_transient(self, tile_id: str) -> bool:
+        with self.lock:
+            if tile_id not in self.transient:
+                return False
+            self.transient.pop(tile_id, None)
+            worker = self.workers.pop(tile_id, None)
+            if worker is not None:
+                worker.stop()
+            return True
+
+    # ---- 杂项 ----
+
     def worker(self, tile_id: str) -> TileWorker:
         with self.lock:
             w = self.workers.get(tile_id)
@@ -90,6 +152,11 @@ class Runtime:
 
     def close(self) -> None:
         with self.lock:
+            if self.hotkey is not None:
+                try:
+                    self.hotkey.stop()
+                except Exception:  # noqa: BLE001
+                    pass
             self._stop_all()
             self.backend.close()
 
@@ -140,6 +207,45 @@ def create_app(config_path: str | Path) -> FastAPI:
     app = FastAPI(title="Window Dashboard", version="0.1.0")
     app.state.runtime = rt
 
+    # ---- 模式 A：全局快捷键截取当前聚焦窗口 ----
+
+    def _spawn_pin(tile_id: str, own: bool = False) -> None:
+        base = f"http://127.0.0.1:{int(cfg.server.get('port', 8777))}"
+        extra = ["--own-tile"] if own else []
+        if getattr(sys, "frozen", False):
+            cmd = [sys.executable, "--pin", tile_id, "--server", base, *extra]
+        else:
+            cmd = [
+                sys.executable,
+                str(Path(__file__).resolve().parent.parent / "run.py"),
+                "--pin", tile_id, "--server", base, *extra,
+            ]
+        subprocess.Popen(cmd, start_new_session=True)
+
+    def _capture_focused() -> dict[str, Any] | None:
+        win = rt.backend.focused_window()
+        if win is None:
+            return None
+        return rt.add_transient(win.handle, win.title)
+
+    def _on_hotkey() -> None:
+        try:
+            tile = _capture_focused()
+            if tile is None:
+                print("[!] 快捷键：没有找到聚焦窗口", file=sys.stderr)
+                return
+            _spawn_pin(tile["id"], own=True)
+            print(f"[i] 已贴图: {tile['title'][:40]}")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[!] 快捷键处理失败: {exc}", file=sys.stderr)
+
+    try:
+        rt.hotkey = get_hotkey_listener(_on_hotkey, cfg.defaults.get("hotkey", "ctrl+alt+p"))
+        if rt.hotkey is not None:
+            rt.hotkey.start()
+    except Exception as exc:  # noqa: BLE001
+        print(f"[!] 全局快捷键不可用: {exc}", file=sys.stderr)
+
     @app.on_event("shutdown")
     def _shutdown() -> None:  # pragma: no cover
         rt.close()
@@ -148,11 +254,15 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "index.html")
+        return FileResponse(STATIC_DIR / "canvas.html")
 
     @app.get("/setup", include_in_schema=False)
     def setup_page() -> FileResponse:
         return FileResponse(STATIC_DIR / "setup.html")
+
+    @app.get("/pins", include_in_schema=False)
+    def pins_page() -> FileResponse:
+        return FileResponse(STATIC_DIR / "pins.html")
 
     # ---- 状态 ----
 
@@ -163,6 +273,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         return {
             "platform": rt.backend.name,
             "layout": cfg.layout,
+            "hotkey": cfg.defaults.get("hotkey", "ctrl+alt+p"),
             "tiles": [w.status() for w in workers],
         }
 
@@ -203,6 +314,45 @@ def create_app(config_path: str | Path) -> FastAPI:
     def api_config() -> dict[str, Any]:
         return cfg.data
 
+    # ---- 模式 B：画布布局 ----
+
+    @app.put("/api/tiles/{tile_id}/canvas")
+    def api_canvas(tile_id: str, body: CanvasBody) -> dict[str, Any]:
+        rect = {
+            "x": round(float(body.x), 1),
+            "y": round(float(body.y), 1),
+            "w": round(max(40.0, float(body.w)), 1),
+            "h": round(max(20.0, float(body.h)), 1),
+        }
+        tile = cfg.tile(tile_id)
+        if tile is None:
+            # 瞬时 tile 的位置只留在内存里
+            with rt.lock:
+                transient = rt.transient.get(tile_id)
+                if transient is None:
+                    raise HTTPException(404, f"unknown tile: {tile_id}")
+                transient["canvas"] = rect
+            return {"ok": True, "persisted": False}
+        tile["canvas"] = rect
+        cfg.save()
+        return {"ok": True, "persisted": True}
+
+    # ---- 模式 A：截取当前聚焦窗口 ----
+
+    @app.post("/api/capture-focus")
+    def api_capture_focus(pin: bool = True) -> dict[str, Any]:
+        tile = _capture_focused()
+        if tile is None:
+            raise HTTPException(404, "没有找到聚焦窗口")
+        pinned = False
+        if pin:
+            try:
+                _spawn_pin(tile["id"], own=True)
+                pinned = True
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(500, f"拉起贴图失败: {exc}") from exc
+        return {"ok": True, "id": tile["id"], "title": tile["title"], "pinned": pinned}
+
     @app.post("/api/reload")
     def api_reload() -> dict[str, Any]:
         cfg.load()
@@ -222,6 +372,9 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     @app.delete("/api/tiles/{tile_id}")
     def api_delete_tile(tile_id: str) -> dict[str, Any]:
+        # 瞬时 tile（模式 A 快捷键截取的）只从运行时移除
+        if rt.remove_transient(tile_id):
+            return {"ok": True}
         if not cfg.remove_tile(tile_id):
             raise HTTPException(404, f"unknown tile: {tile_id}")
         cfg.save()

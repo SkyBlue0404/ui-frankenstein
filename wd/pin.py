@@ -73,10 +73,13 @@ class _Poller(threading.Thread):
 
 class PinWindow:
     def __init__(self, server: str, tile_id: str, scale: float = 1.0,
-                 x: int | None = None, y: int | None = None) -> None:
+                 x: int | None = None, y: int | None = None,
+                 own_tile: bool = False) -> None:
         self.server = server.rstrip("/")
         self.tile_id = tile_id
         self.scale = max(0.2, min(6.0, float(scale)))
+        # 模式 A 快捷键截取的「瞬时 tile」由贴图窗口自己持有，关窗即回收
+        self.own_tile = own_tile
 
         self._frames: "queue.Queue[bytes]" = queue.Queue()
         self._poller = _Poller(
@@ -318,11 +321,26 @@ class PinWindow:
     # ---- 生命周期 ----
 
     def close(self) -> None:
+        if self._closed:
+            return
         self._closed = True
         self._poller.stop()
+        if self.own_tile:
+            threading.Thread(target=self._release_tile, daemon=True).start()
         try:
             self.root.destroy()
         except tk.TclError:
+            pass
+
+    def _release_tile(self) -> None:
+        """回收服务端为这张贴图创建的瞬时 tile。"""
+        try:
+            req = urllib.request.Request(
+                f"{self.server}/api/tiles/{urllib.parse.quote(self.tile_id)}",
+                method="DELETE",
+            )
+            urllib.request.urlopen(req, timeout=2).read()
+        except Exception:  # noqa: BLE001
             pass
 
     def run(self) -> None:
@@ -338,9 +356,10 @@ class PinWindow:
 
 
 def run_pin(server: str, tile_id: str, scale: float = 1.0,
-            x: int | None = None, y: int | None = None) -> int:
+            x: int | None = None, y: int | None = None,
+            own_tile: bool = False) -> int:
     try:
-        app = PinWindow(server, tile_id, scale=scale, x=x, y=y)
+        app = PinWindow(server, tile_id, scale=scale, x=x, y=y, own_tile=own_tile)
     except Exception as exc:  # noqa: BLE001
         print(f"[!] 贴图启动失败：{exc}")
         return 1
