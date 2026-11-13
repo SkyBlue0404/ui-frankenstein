@@ -86,6 +86,7 @@ function createPanel(cfg, index) {
     </div>
     <span class="dot" data-role="dot" title="未连接"></span>
     <div class="panel-tools">
+      <button class="mini" data-act="region" title="调整区域：拖动四边四角改截取范围">▦</button>
       <button class="mini" data-act="pin" title="贴到桌面（Snipaste 风格）">📌</button>
       <select class="scale" data-act="scale" title="缩放">
         <option value="0.5">50%</option>
@@ -178,6 +179,12 @@ function createPanel(cfg, index) {
     applyScale(entry, parseFloat(e.target.value) || 1);
   });
   $('[data-act=scale]', el).addEventListener('pointerdown', (e) => e.stopPropagation());
+  $('[data-act=region]', el).addEventListener('click', (e) => {
+    e.stopPropagation();
+    entry.regionMode = !entry.regionMode;
+    el.classList.toggle('region-mode', entry.regionMode);
+    toast(entry.regionMode ? '调整区域模式：拖四边四角改截取范围（再点一次退出）' : '已退出调整区域');
+  });
 
   applyStatus(entry, cfg);
   return entry;
@@ -314,6 +321,8 @@ function startResize(evt, entry, dir) {
     startX: p.x,
     startY: p.y,
     base: { ...entry.rect },
+    regionMode: !!entry.regionMode,
+    baseRegion: { ...(entry.cfg.region || { x: 0, y: 0, w: 1, h: 1 }) },
     pointerId: evt.pointerId,
   };
   entry.el.classList.add('resizing');
@@ -323,12 +332,62 @@ function startResize(evt, entry, dir) {
   document.addEventListener('pointerup', onResizeUp);
 }
 
+/**
+ * 「调整区域」模式下拖手柄：改的是**裁剪范围**（源窗口里的归一化矩形），
+ * 面板按同一显示缩放跟着变大变小。
+ */
+function applyRegionDrag(s, dx, dy) {
+  const entry = s.entry;
+  const [W, H] = entry.cfg.window_size || [0, 0];
+  if (!W || !H) return;
+
+  const reg = s.baseRegion;
+  const sx = s.base.w / Math.max(1, reg.w * W); // 显示 px / 源 px
+  const sy = s.base.h / Math.max(1, reg.h * H);
+  if (sx <= 0 || sy <= 0) return;
+
+  const dRx = dx / (sx * W);
+  const dRy = dy / (sy * H);
+
+  let rx1 = reg.x;
+  let ry1 = reg.y;
+  let rx2 = reg.x + reg.w;
+  let ry2 = reg.y + reg.h;
+  if (s.dir.includes('w')) rx1 += dRx;
+  if (s.dir.includes('e')) rx2 += dRx;
+  if (s.dir.includes('n')) ry1 += dRy;
+  if (s.dir.includes('s')) ry2 += dRy;
+
+  const minR = 2 / Math.min(W, H); // 至少 2 个源像素
+  rx1 = Math.max(0, Math.min(rx1, rx2 - minR));
+  ry1 = Math.max(0, Math.min(ry1, ry2 - minR));
+  rx2 = Math.min(1, Math.max(rx2, rx1 + minR));
+  ry2 = Math.min(1, Math.max(ry2, ry1 + minR));
+
+  const newReg = { x: rx1, y: ry1, w: rx2 - rx1, h: ry2 - ry1 };
+  const newW = newReg.w * W * sx;
+  const newH = newReg.h * H * sy;
+
+  // 拖左边/上边时，右边/下边保持不动
+  const x = s.dir.includes('w') ? s.base.x + s.base.w - newW : s.base.x;
+  const y = s.dir.includes('n') ? s.base.y + s.base.h - newH : s.base.y;
+
+  entry.cfg.region = newReg;
+  entry.rect = { x, y, w: newW, h: newH };
+  applyRect(entry, entry.rect);
+}
+
 function onResizeMove(evt) {
   const s = app.resize;
   if (!s) return;
   const cur = canvasPoint(evt);
   const dx = cur.x - s.startX;
   const dy = cur.y - s.startY;
+
+  if (s.regionMode) {
+    applyRegionDrag(s, dx, dy);
+    return;
+  }
 
   let { x, y, w, h } = s.base;
   let x2 = x + w;
@@ -351,7 +410,22 @@ async function onResizeUp(evt) {
   if (!s) return;
   try { s.entry.el.releasePointerCapture(s.pointerId); } catch { /* ignore */ }
   s.entry.el.classList.remove('resizing');
+  if (s.regionMode) await saveRegion(s.entry);
   await saveRect(s.entry);
+}
+
+async function saveRegion(entry) {
+  const r = entry.cfg.region;
+  if (!r) return;
+  try {
+    await fetch(`/api/tiles/${encodeURIComponent(entry.cfg.id)}/region`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(r),
+    });
+  } catch (err) {
+    toast(`保存区域失败: ${err.message}`, true);
+  }
 }
 
 async function saveRect(entry) {

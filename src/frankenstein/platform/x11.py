@@ -27,6 +27,14 @@ _RESTORE_FOCUS_AFTER_CLICK = True
 # 并抢焦点。用户要的是「后台操作」，所以点完必须把它塞回原来的堆叠位置。
 _RESTORE_STACK_AFTER_CLICK = True
 
+# 只有 Chromium / Electron 系程序需要「先激活再发事件」——它们会把非激活状态下的
+# 合成事件直接丢掉。GTK / Qt / 传统 X11 程序不需要，跳过激活能省掉 ~100ms。
+_CHROMIUM_CLASS_HINTS = (
+    "chrome", "chromium", "electron", "vscode", "feishu",
+    "brave", "vivaldi", "msedge", "opera", "slack", "discord",
+    "spotify", "notion", "teams", "obsidian", "typora", "postman",
+)
+
 
 class X11Backend(PlatformBackend):
     """X11 (Xorg) 后端。
@@ -216,9 +224,19 @@ class X11Backend(PlatformBackend):
             pos = self._root.translate_coords(w, 0, 0)
             return Rect(int(pos.x), int(pos.y), int(geom.width), int(geom.height))
 
-    def grab_window(self, handle: str, mode: str = "window") -> Image.Image:
+    def grab_window(
+        self, handle: str, mode: str = "window", box: tuple[int, int, int, int] | None = None
+    ) -> Image.Image:
+        """抓窗口。
+
+        box=(x, y, w, h) 时只向 X 服务器要这一块 —— 整窗 1920x1080 要 ~100ms，
+        只抓一条 1920x97 的标签栏只要 ~2ms，而且占着 X 连接锁的时间极短。
+        """
         if mode == "screen":
             r = self.window_rect(handle)
+            if box:
+                bx, by, bw, bh = box
+                r = Rect(r.x + int(bx), r.y + int(by), max(1, int(bw)), max(1, int(bh)))
             return self._grab_screen_rect(r)
 
         with self._lock:
@@ -227,17 +245,27 @@ class X11Backend(PlatformBackend):
             width, height = int(geom.width), int(geom.height)
             if width <= 0 or height <= 0:
                 raise RuntimeError(f"window has no area: {width}x{height}")
-            raw = w.get_image(0, 0, width, height, X.ZPixmap, 0xFFFFFFFF)
+
+            if box:
+                bx, by, bw, bh = (int(v) for v in box)
+                bx = max(0, min(width - 1, bx))
+                by = max(0, min(height - 1, by))
+                bw = max(1, min(width - bx, bw))
+                bh = max(1, min(height - by, bh))
+            else:
+                bx, by, bw, bh = 0, 0, width, height
+
+            raw = w.get_image(bx, by, bw, bh, X.ZPixmap, 0xFFFFFFFF)
             data = raw.data
             if isinstance(data, str):  # 老版本 python-xlib 返回 str
                 data = data.encode("latin-1")
 
-        bpl = len(data) // height if height else 0
-        bpp = bpl // width if width else 0
+        bpl = len(data) // bh if bh else 0
+        bpp = bpl // bw if bw else 0
         fmt = {4: "BGRX", 3: "BGR", 2: "BGRX"}.get(bpp)
         if fmt is None:
             raise RuntimeError(f"unsupported pixel layout: {bpp} bytes/px")
-        return Image.frombuffer("RGB", (width, height), data, "raw", fmt, 0, 1).copy()
+        return Image.frombuffer("RGB", (bw, bh), data, "raw", fmt, 0, 1).copy()
 
     def _grab_screen_rect(self, r: Rect) -> Image.Image:
         sct = self._mss()
@@ -365,10 +393,16 @@ class X11Backend(PlatformBackend):
     ) -> None:
         """保证目标窗口处于激活状态，然后立刻把它塞回原堆叠位置。
 
-        Chromium / Electron（VS Code、Chrome 等）**只处理「自己处于激活状态」
+        Chromium / Electron（VS Code、Chrome、飞书等）**只处理「自己处于激活状态」
         时的合成事件**，不激活就完全忽略。而激活必然伴随一次 raise，所以这里
         「激活 → 轮询到焦点 → 马上塞回去」，把闪到前台的时间压到最短。
+
+        GTK / Qt / 传统 X11 程序不需要激活，跳过能省掉 ~100ms 延迟。
         """
+        if self.click_mode != "event" or not _ACTIVATE_BEFORE_CLICK:
+            return
+        if not self._is_chromium(win):
+            return  # 非 Chromium 系：直接发事件就行，不用等激活
         if self._is_focused(win):
             return  # 本来就激活，不闪
         self._activate(win)
@@ -497,6 +531,21 @@ class X11Backend(PlatformBackend):
             return child.id == self._toplevel(win).id
         except Exception:
             return False
+
+    def _is_chromium(self, win: Any) -> bool:
+        """是不是 Chromium / Electron 系程序（只有它们需要先激活再发事件）。"""
+        try:
+            prop = win.get_full_property(self._atom_wm_class, X.AnyPropertyType)
+            raw = prop.value if prop is not None else b""
+            if isinstance(raw, bytes):
+                cls = raw.split(b"\x00")[0].decode("utf-8", "replace").lower()
+            else:
+                cls = str(raw).lower()
+        except Exception:  # noqa: BLE001
+            return True  # 判断不出来时保守处理：走激活
+        if not cls:
+            return True
+        return any(hint in cls for hint in _CHROMIUM_CLASS_HINTS)
 
     def _is_focused(self, win: Any) -> bool:
         """目标窗口是否已经有输入焦点。

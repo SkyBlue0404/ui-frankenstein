@@ -29,6 +29,7 @@ class TileWorker(threading.Thread):
         self.backend = backend
 
         self._stop = threading.Event()
+        self._poke = threading.Event()  # 点击后请求立刻刷新一帧
         self._cond = threading.Condition()
 
         self._jpeg: bytes | None = None
@@ -50,8 +51,13 @@ class TileWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop.set()
+        self._poke.set()  # 叫醒可能正在等间隔的线程
         with self._cond:
             self._cond.notify_all()
+
+    def poke(self) -> None:
+        """请求立刻抓一帧（点击之后调用，让操作结果马上出现在面板上）。"""
+        self._poke.set()
 
     @property
     def stopped(self) -> bool:
@@ -81,7 +87,9 @@ class TileWorker(threading.Thread):
                 self._fps = (len(self._frame_ts) - 1) / span if span > 0 else 0.0
 
             interval = 1.0 / max(0.5, float(self.cfg.get("fps", 8)))
-            self._stop.wait(max(0.0, interval - (now - t0)))
+            # 用 Event 等间隔：被 poke() 时立刻开始下一帧
+            self._poke.wait(max(0.0, interval - (now - t0)))
+            self._poke.clear()
 
     # ---- 抓取 ----
 
@@ -90,10 +98,10 @@ class TileWorker(threading.Thread):
         if handle is None:
             raise RuntimeError(self._not_found_message())
 
-        img = self.backend.grab_window(handle, mode=self.cfg.get("capture", "window"))
-        W, H = img.size
-        if W <= 0 or H <= 0:
-            raise RuntimeError("captured window is empty")
+        # 只向系统要裁剪区那一块：整窗抓取在大窗口上要 50~100ms，
+        # 裁剪区通常只要 1~2ms，而且占着 X 连接锁的时间极短（点击才不会排队）。
+        rect = self.backend.window_rect(handle)
+        W, H = max(1, int(rect.w)), max(1, int(rect.h))
 
         region = self.cfg["region"]
         x0 = int(round(region["x"] * W))
@@ -105,7 +113,11 @@ class TileWorker(threading.Thread):
         x1 = max(x0 + 1, min(W, x1))
         y1 = max(y0 + 1, min(H, y1))
 
-        crop = img.crop((x0, y0, x1, y1))
+        crop = self.backend.grab_window(
+            handle,
+            mode=self.cfg.get("capture", "window"),
+            box=(x0, y0, x1 - x0, y1 - y0),
+        )
         with self._cond:
             self._win_size = (W, H)
             self._crop_size = crop.size
@@ -187,6 +199,7 @@ class TileWorker(threading.Thread):
                 "handle": self._handle,
                 "interactive": bool(self.cfg.get("interactive", True)),
                 "canvas": self.cfg.get("canvas"),
+                "region": dict(self.cfg.get("region") or {}),
             }
 
     def latest_size(self) -> tuple[tuple[int, int], tuple[int, int]]:
@@ -209,6 +222,7 @@ class TileWorker(threading.Thread):
         px = max(0, min(W - 1, px))
         py = max(0, min(H - 1, py))
         self.backend.click(handle, px, py, button=button, double=double)
+        self.poke()
 
     def scroll(self, cx: float, cy: float, delta: int) -> None:
         handle = self._handle or self._resolve_handle()
@@ -221,3 +235,4 @@ class TileWorker(threading.Thread):
         px = int(round(region["x"] * W + cx))
         py = int(round(region["y"] * H + cy))
         self.backend.scroll(handle, max(0, min(W - 1, px)), max(0, min(H - 1, py)), delta)
+        self.poke()

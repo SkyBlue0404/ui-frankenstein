@@ -41,11 +41,15 @@ class PlatformBackend(ABC):
         """窗口在屏幕上的绝对矩形。"""
 
     @abstractmethod
-    def grab_window(self, handle: str, mode: str = "window") -> Image.Image:
-        """抓取整窗画面。
+    def grab_window(
+        self, handle: str, mode: str = "window", box: tuple[int, int, int, int] | None = None
+    ) -> Image.Image:
+        """抓取窗口画面。
 
         mode="window": 抓窗口自身内容，窗口被遮挡也能抓到（推荐）。
         mode="screen": 抓窗口所在的屏幕区域，永远正确但要求窗口可见。
+        box=(x, y, w, h): 只抓窗口内的这一块（窗口坐标）。给了它就别抓整窗，
+                          大窗口整窗抓取非常慢。
         """
 
     # ---- 输入 ----

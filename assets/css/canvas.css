@@ -75,6 +75,23 @@ body.canvas-mode {
   box-shadow: 0 16px 48px rgba(0, 0, 0, .62);
 }
 
+/* 「调整区域」模式：橙色边框 + 手柄高亮，表示现在改的是截取范围 */
+.panel.region-mode {
+  border-color: #f5a524;
+  box-shadow: 0 0 0 1px #f5a524, 0 8px 28px rgba(0, 0, 0, .38);
+}
+.panel.region-mode .handle {
+  background: #f5a524;
+  opacity: .85;
+}
+.panel.region-mode .handle[data-dir="nw"], .panel.region-mode .handle[data-dir="ne"],
+.panel.region-mode .handle[data-dir="sw"], .panel.region-mode .handle[data-dir="se"] {
+  border-radius: 50%;
+}
+.panel.region-mode .panel-body {
+  cursor: crosshair;
+}
+
 /* 面板主体 = 整块画面，没有标题栏，空间全给内容 */
 .panel-body {
   position: absolute;

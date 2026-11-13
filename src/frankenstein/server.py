@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import re
 import subprocess
 import sys
 import threading
@@ -9,7 +10,7 @@ from pathlib import Path
 from typing import Any, Iterator
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -35,6 +36,27 @@ ASSETS_DIR = _assets_dir()
 HTML_DIR = ASSETS_DIR / "html"
 _BOUNDARY = b"--frame\r\n"
 
+_ASSET_RE = re.compile(r"/static/([A-Za-z0-9_./-]+\.(?:css|js))")
+
+
+def _render_html(name: str) -> HTMLResponse:
+    """读模板并给静态资源加 mtime 版本号 —— 改了前端代码刷新就生效，不用清缓存。"""
+    path = HTML_DIR / name
+    html = path.read_text("utf-8")
+
+    def _repl(m: re.Match[str]) -> str:
+        rel = m.group(1)
+        try:
+            version = int((ASSETS_DIR / rel).stat().st_mtime)
+        except OSError:
+            version = 0
+        return f"/static/{rel}?v={version}"
+
+    return HTMLResponse(
+        _ASSET_RE.sub(_repl, html),
+        headers={"Cache-Control": "no-store, no-cache, must-revalidate"},
+    )
+
 
 # ---------------------------------------------------------------------------
 # 请求体
@@ -59,6 +81,15 @@ class CanvasBody(BaseModel):
     y: float = 40.0
     w: float = 480.0
     h: float = 300.0
+
+
+class RegionUpdate(BaseModel):
+    """二次调整裁剪区域（窗口内归一化坐标）。"""
+
+    x: float
+    y: float
+    w: float
+    h: float
 
 
 class RegionBody(BaseModel):
@@ -146,7 +177,7 @@ class Runtime:
                     "index": 0,
                 },
                 "region": region or {"x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0},
-                "fps": float(self.cfg.defaults.get("fps", 8)),
+                "fps": float(self.cfg.defaults.get("fps", 12)),
                 "quality": int(self.cfg.defaults.get("quality", 80)),
                 "capture": str(self.cfg.defaults.get("capture", "window")),
                 "interactive": True,
@@ -231,8 +262,16 @@ def create_app(config_path: str | Path) -> FastAPI:
     rt = Runtime(cfg)
     rt.start()
 
-    app = FastAPI(title="Window Dashboard", version="0.1.0")
+    app = FastAPI(title="Frankenstein", version="0.1.0")
     app.state.runtime = rt
+
+    @app.middleware("http")
+    async def _no_cache_assets(request: Request, call_next):  # type: ignore[no-untyped-def]
+        """前端素材禁缓存：本地工具，改了代码刷新就该看到。"""
+        response = await call_next(request)
+        if request.url.path.startswith("/static/"):
+            response.headers["Cache-Control"] = "no-cache, must-revalidate"
+        return response
 
     # ---- 模式 A：全局快捷键截取当前聚焦窗口 ----
 
@@ -287,15 +326,15 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(HTML_DIR / "canvas.html")
+        return _render_html("canvas.html")
 
     @app.get("/setup", include_in_schema=False)
     def setup_page() -> FileResponse:
-        return FileResponse(HTML_DIR / "setup.html")
+        return _render_html("setup.html")
 
     @app.get("/pins", include_in_schema=False)
     def pins_page() -> FileResponse:
-        return FileResponse(HTML_DIR / "pins.html")
+        return _render_html("pins.html")
 
     # ---- 状态 ----
 
@@ -370,8 +409,31 @@ def create_app(config_path: str | Path) -> FastAPI:
         cfg.save()
         return {"ok": True, "persisted": True}
 
-    # ---- 模式 A：区域截取 ----
+    @app.put("/api/tiles/{tile_id}/region")
+    def api_region(tile_id: str, body: RegionUpdate) -> dict[str, Any]:
+        """二次调整裁剪区域：改了之后立刻重启这个 tile 的抓帧线程。"""
+        x = max(0.0, min(1.0, float(body.x)))
+        y = max(0.0, min(1.0, float(body.y)))
+        w = max(0.002, min(1.0 - x, float(body.w)))
+        h = max(0.002, min(1.0 - y, float(body.h)))
+        region = {"x": round(x, 6), "y": round(y, 6), "w": round(w, 6), "h": round(h, 6)}
 
+        tile = cfg.tile(tile_id)
+        if tile is None:
+            with rt.lock:
+                transient = rt.transient.get(tile_id)
+                if transient is None:
+                    raise HTTPException(404, f"unknown tile: {tile_id}")
+                transient["region"] = region
+            rt.sync()
+            return {"ok": True, "persisted": False, "region": region}
+
+        tile["region"] = region
+        cfg.save()
+        rt.sync()
+        return {"ok": True, "persisted": True, "region": region}
+
+    # ---- 模式 A：区域截取 ----
     @app.post("/api/capture-focus")
     def api_capture_focus() -> dict[str, Any]:
         """打开全屏框选遮罩（等同于按快捷键）。"""

@@ -11,7 +11,7 @@ from typing import Any
 DEFAULT_CONFIG: dict[str, Any] = {
     "server": {"host": "127.0.0.1", "port": 8777},
     "defaults": {
-        "fps": 8,
+        "fps": 12,
         "quality": 80,
         "capture": "window",
         "click_mode": "event",
@@ -189,7 +189,7 @@ class Config:
             "title": str(tile.get("title") or tid),
             "window": window,
             "region": {"x": round(x, 6), "y": round(y, 6), "w": round(w, 6), "h": round(h, 6)},
-            "fps": max(0.5, min(30.0, float(tile.get("fps") or defaults.get("fps", 8)))),
+            "fps": max(0.5, min(30.0, float(tile.get("fps") or defaults.get("fps", 12)))),
             "quality": max(30, min(95, int(tile.get("quality") or defaults.get("quality", 80)))),
             "capture": capture,
             "interactive": bool(tile.get("interactive", True)),

@@ -295,7 +295,20 @@ class Win32Backend(PlatformBackend):
         user32.GetWindowRect(wintypes.HWND(int(handle)), ctypes.byref(r))
         return Rect(r.left, r.top, r.right - r.left, r.bottom - r.top)
 
-    def grab_window(self, handle: str, mode: str = "window") -> Image.Image:
+    def grab_window(
+        self, handle: str, mode: str = "window", box: tuple[int, int, int, int] | None = None
+    ) -> Image.Image:
+        img = self._grab_full(handle, mode)
+        if not box:
+            return img
+        bx, by, bw, bh = (int(v) for v in box)
+        bx = max(0, min(img.width - 1, bx))
+        by = max(0, min(img.height - 1, by))
+        bw = max(1, min(img.width - bx, bw))
+        bh = max(1, min(img.height - by, bh))
+        return img.crop((bx, by, bx + bw, by + bh))
+
+    def _grab_full(self, handle: str, mode: str = "window") -> Image.Image:
         hwnd = int(handle)
         with self._lock:
             r = wintypes.RECT()

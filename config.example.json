@@ -4,7 +4,7 @@
     "port": 8777
   },
   "defaults": {
-    "fps": 8,
+    "fps": 12,
     "quality": 80,
     "capture": "window"
   },
@@ -23,7 +23,7 @@
         "index": 0
       },
       "region": { "x": 0.0, "y": 0.0, "w": 1.0, "h": 0.12 },
-      "fps": 8,
+      "fps": 12,
       "quality": 80,
       "capture": "window",
       "interactive": true
