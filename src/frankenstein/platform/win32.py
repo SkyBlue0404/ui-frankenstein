@@ -154,6 +154,15 @@ _MOD_ALIASES = {
     "super": 0x0008, "win": 0x0008,
 }
 
+# 特殊键的虚拟键码
+_VK_NAMES = {
+    "space": 0x20, "tab": 0x09, "enter": 0x0D, "return": 0x0D, "escape": 0x1B,
+    "insert": 0x2D, "delete": 0x2E, "home": 0x24, "end": 0x23,
+    "pageup": 0x21, "pagedown": 0x22,
+    "up": 0x26, "down": 0x28, "left": 0x25, "right": 0x27,
+}
+_VK_NAMES.update({f"f{i}": 0x6F + i for i in range(1, 25)})
+
 
 def _enable_dpi_awareness() -> None:
     """必须在任何 GetWindowRect 之前调用，否则拿到的是被虚拟化的坐标。"""
@@ -472,7 +481,10 @@ class Win32Backend(PlatformBackend):
 
 
 def _vk_for(key: str) -> int:
-    """"p" -> 'P' 的虚拟键码；单字符走 VkKeyScanW。"""
+    """"p" -> 'P' 的虚拟键码；功能键/特殊键查表，其余走 VkKeyScanW。"""
+    key = key.strip().lower()
+    if key in _VK_NAMES:
+        return _VK_NAMES[key]
     if len(key) != 1:
         return 0
     scan = user32.VkKeyScanW(wintypes.WCHAR(key))

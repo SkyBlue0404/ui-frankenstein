@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import re
 import subprocess
 import sys
@@ -92,6 +93,29 @@ class RegionUpdate(BaseModel):
     h: float
 
 
+class HotkeyBody(BaseModel):
+    hotkey: str
+
+
+_HOTKEY_RE = re.compile(
+    r"^(?:(?:ctrl|control|alt|shift|super|win|meta)\+)*"
+    r"(?:[a-z0-9]|f[1-9]|f1[0-9]|f2[0-4]|space|tab|enter|escape|insert|delete|home|end|"
+    r"pageup|pagedown|up|down|left|right|minus|equal|comma|period|slash|backslash|"
+    r"grave|bracketleft|bracketright|semicolon|apostrophe)$",
+    re.IGNORECASE,
+)
+
+
+def _valid_hotkey(spec: str) -> bool:
+    parts = [p for p in spec.split("+") if p.strip()]
+    if not parts:
+        return False
+    # 至少要有一个修饰键，否则会抢走普通按键
+    if len(parts) < 2:
+        return False
+    return bool(_HOTKEY_RE.match("+".join(p.strip().lower() for p in parts)))
+
+
 class RegionBody(BaseModel):
     """全屏框选提交的屏幕坐标矩形。"""
 
@@ -116,6 +140,7 @@ class Runtime:
         # 模式 A 的瞬时 tile：快捷键截取的窗口，不写进配置文件
         self.transient: dict[str, dict[str, Any]] = {}
         self.hotkey: Any = None
+        self._hotkey_cb: Any = None
         self.lock = threading.RLock()
 
     # ---- tile 集合 ----
@@ -154,8 +179,30 @@ class Runtime:
                     worker.start()
                     self.workers[tid] = worker
 
-    # ---- 瞬时 tile（模式 A） ----
+    # ---- 全局快捷键 ----
 
+    def restart_hotkey(self, spec: str) -> bool:
+        """换一个全局快捷键：停掉旧的监听器，按新键重新 grab。"""
+        with self.lock:
+            if self.hotkey is not None:
+                try:
+                    self.hotkey.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                self.hotkey = None
+            if self._hotkey_cb is None:
+                return False
+            try:
+                self.hotkey = get_hotkey_listener(self._hotkey_cb, spec)
+            except Exception:  # noqa: BLE001
+                self.hotkey = None
+                return False
+            if self.hotkey is None:
+                return False
+            self.hotkey.start()
+            return True
+
+    # ---- 瞬时 tile（模式 A） ----
     def add_transient(
         self, handle: str, title: str, region: dict[str, float] | None = None
     ) -> dict[str, Any]:
@@ -311,12 +358,9 @@ def create_app(config_path: str | Path) -> FastAPI:
         except Exception as exc:  # noqa: BLE001
             print(f"[!] 快捷键处理失败: {exc}", file=sys.stderr)
 
-    try:
-        rt.hotkey = get_hotkey_listener(_on_hotkey, cfg.defaults.get("hotkey", "ctrl+alt+p"))
-        if rt.hotkey is not None:
-            rt.hotkey.start()
-    except Exception as exc:  # noqa: BLE001
-        print(f"[!] 全局快捷键不可用: {exc}", file=sys.stderr)
+    rt._hotkey_cb = _on_hotkey
+    if not rt.restart_hotkey(cfg.defaults.get("hotkey", "ctrl+alt+p")):
+        print("[!] 全局快捷键不可用（可能被占用或被系统限制）", file=sys.stderr)
 
     @app.on_event("shutdown")
     def _shutdown() -> None:  # pragma: no cover
@@ -434,6 +478,27 @@ def create_app(config_path: str | Path) -> FastAPI:
         return {"ok": True, "persisted": True, "region": region}
 
     # ---- 模式 A：区域截取 ----
+
+    @app.post("/api/quit")
+    def api_quit() -> dict[str, Any]:
+        """退出后台进程（守护模式下没有窗口，用这个关）。"""
+        threading.Timer(0.4, lambda: os._exit(0)).start()
+        return {"ok": True}
+
+    @app.put("/api/hotkey")
+    def api_hotkey(body: HotkeyBody) -> dict[str, Any]:
+        """改全局快捷键，即时生效并写回配置。"""
+        spec = body.hotkey.strip().lower()
+        if not _valid_hotkey(spec):
+            raise HTTPException(
+                400, "快捷键至少要有一个修饰键（Ctrl / Alt / Shift / Super）+ 一个按键，例如 ctrl+shift+f9"
+            )
+        if not rt.restart_hotkey(spec):
+            raise HTTPException(500, "注册失败，这个组合可能已被其他程序占用")
+        cfg.data["defaults"]["hotkey"] = spec
+        cfg.save()
+        return {"ok": True, "hotkey": spec}
+
     @app.post("/api/capture-focus")
     def api_capture_focus() -> dict[str, Any]:
         """打开全屏框选遮罩（等同于按快捷键）。"""

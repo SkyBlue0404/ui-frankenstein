@@ -626,6 +626,18 @@ def parse_hotkey(spec: str) -> tuple[str, int] | None:
     return key, mods
 
 
+def keysym_for(name: str) -> int:
+    """把按键名转成 keysym。X11 的 keysym 名字大小写不统一（"space" / "F9"），都试一遍。"""
+    for candidate in (name, name.capitalize(), name.upper()):
+        try:
+            ks = XK.string_to_keysym(candidate)
+        except Exception:  # noqa: BLE001
+            ks = 0
+        if ks:
+            return int(ks)
+    return 0
+
+
 class HotkeyListener(threading.Thread):
     """全局快捷键监听。
 
@@ -648,7 +660,7 @@ class HotkeyListener(threading.Thread):
             print(f"[!] 无法解析快捷键: {self._hotkey}", file=sys.stderr)
             return
         key_name, mods = parsed
-        keycode = self._dpy.keysym_to_keycode(XK.string_to_keysym(key_name))
+        keycode = self._dpy.keysym_to_keycode(keysym_for(key_name))
         if not keycode:
             print(f"[!] 找不到键位: {key_name}", file=sys.stderr)
             return

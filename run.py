@@ -14,6 +14,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import urllib.request
 import webbrowser
 from pathlib import Path
 
@@ -131,6 +132,15 @@ def open_ui(url: str, mode: str = "app") -> bool:
     return False
 
 
+def _already_running(url: str) -> bool:
+    """端口上是不是已经有一个 Frankenstein 在跑。"""
+    try:
+        with urllib.request.urlopen(url.rstrip("/") + "/api/state", timeout=1.0) as resp:
+            return resp.status == 200
+    except Exception:  # noqa: BLE001
+        return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="把多个工具窗口的指定区域拼成一个自适应操作面板")
     parser.add_argument("-c", "--config", default=str(ROOT / "config.json"), help="配置文件路径")
@@ -140,6 +150,10 @@ def main(argv: list[str] | None = None) -> int:
                         help="启动后不打开界面窗口（纯服务模式）")
     parser.add_argument("--browser", action="store_true",
                         help="用系统默认浏览器打开，而不是无地址栏的 app 窗口")
+    parser.add_argument("--open-only", action="store_true",
+                        help="只打开面板（要求后台已有实例在跑），不启动服务")
+    parser.add_argument("--quit", action="store_true",
+                        help="退出正在后台运行的实例")
     parser.add_argument("--list-windows", action="store_true", help="列出当前窗口后退出")
     parser.add_argument("--pin", metavar="TILE_ID", default=None,
                         help="以贴图模式启动：把这个 tile 钉在桌面最上层（Snipaste 风格）")
@@ -194,13 +208,35 @@ def main(argv: list[str] | None = None) -> int:
 
     host = args.host or cfg.server.get("host", "127.0.0.1")
     port = int(args.port or cfg.server.get("port", 8777))
+    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/"
+
+    if args.quit:
+        try:
+            req = urllib.request.Request(url.rstrip("/") + "/api/quit", method="POST")
+            urllib.request.urlopen(req, timeout=2).read()
+            print("[i] 已通知后台实例退出")
+            return 0
+        except Exception as exc:  # noqa: BLE001
+            print(f"[!] 没有运行中的实例（{exc}）", file=sys.stderr)
+            return 1
+
+    # 已经有实例在跑（后台守护模式）：只把面板弹出来，不再抢端口
+    if _already_running(url):
+        print(f"[i] Frankenstein 已经在后台运行：{url}")
+        if not args.no_window:
+            open_ui(url, "browser" if args.browser else "app")
+        return 0
+
+    if args.open_only:
+        print(f"[!] 没检测到运行中的 Frankenstein（{url}）", file=sys.stderr)
+        print("    先启动服务：frankenstein --no-window", file=sys.stderr)
+        return 1
 
     import uvicorn  # 延迟导入，--list-windows 时不需要
 
     from frankenstein.server import create_app
 
     app = create_app(config_path)
-    url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/"
 
     print(f"Frankenstein  →  {url}")
     print(f"  编辑布局: {url}setup")

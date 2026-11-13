@@ -21,15 +21,20 @@
     </div>
     <div class="actions">
       <button id="btn-capture" class="btn primary">✂️ 截取当前窗口</button>
+      <button id="btn-quit" class="btn" title="退出后台进程">⏻ 退出后台</button>
     </div>
   </header>
 
   <main class="pins-wrap">
     <section class="pins-hero">
-      <h2>按 <kbd id="hotkey">Ctrl + Alt + P</kbd> 截取当前聚焦的窗口</h2>
+      <h2>
+        按
+        <button id="hotkey" class="hotkey-btn" title="点击后按下新的组合键">Ctrl + Alt + P</button>
+        截取并框选
+      </h2>
       <p>截下来的画面会<b>贴在桌面最上层</b>，直接点它就能操作原程序 ——
          但<b>不会</b>把原窗口唤到前台，鼠标也不会被拽走。</p>
-      <p class="muted">适合把十几个后台进程的操作按钮，摊在一屏上随时点。</p>
+      <p class="muted">点上面那个快捷键按钮就能改：按下你想用的组合键即可（Esc 取消）。</p>
     </section>
 
     <div class="pins-head">

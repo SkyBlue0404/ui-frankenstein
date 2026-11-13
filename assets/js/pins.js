@@ -7,16 +7,107 @@ const state = { pins: new Map(), hotkey: 'ctrl+alt+p' };
 
 async function boot() {
   $('#btn-capture').addEventListener('click', captureFocus);
+  $('#hotkey').addEventListener('click', recordHotkey);
+  $('#btn-quit').addEventListener('click', async () => {
+    if (!confirm('退出后台进程？已贴到桌面的窗口也会一起关掉。')) return;
+    try {
+      await fetch('/api/quit', { method: 'POST' });
+    } catch { /* 进程已经没了 */ }
+    toast('已退出后台');
+  });
   await refresh();
   setInterval(refresh, 2500);
 }
+
+/* ---------------- 快捷键录制 ---------------- */
+
+let recording = false;
 
 function prettyHotkey(spec) {
   return String(spec)
     .split('+')
     .map((s) => s.trim())
-    .map((s) => ({ ctrl: 'Ctrl', control: 'Ctrl', alt: 'Alt', shift: 'Shift', super: 'Super', win: 'Win' }[s.toLowerCase()] || s.toUpperCase()))
+    .map((s) => ({
+      ctrl: 'Ctrl', control: 'Ctrl', alt: 'Alt', shift: 'Shift',
+      super: 'Super', win: 'Win', meta: 'Super',
+    }[s.toLowerCase()] || s.toUpperCase()))
     .join(' + ');
+}
+
+function normalizeKey(e) {
+  const k = e.key;
+  if (k === ' ' || e.code === 'Space') return 'space';
+  if (/^F\d{1,2}$/.test(k)) return k.toLowerCase();
+  if (k.length === 1) return k.toLowerCase();
+  const named = {
+    Tab: 'tab', Enter: 'enter', Escape: 'escape', Backspace: 'backspace',
+    Insert: 'insert', Delete: 'delete', Home: 'home', End: 'end',
+    PageUp: 'pageup', PageDown: 'pagedown',
+    ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+  };
+  return named[k] || '';
+}
+
+function recordHotkey() {
+  if (recording) return;
+  recording = true;
+  const btn = $('#hotkey');
+  const oldText = btn.textContent;
+  btn.classList.add('recording');
+  btn.textContent = '按下新的组合键…';
+
+  const stop = () => {
+    recording = false;
+    btn.classList.remove('recording');
+    document.removeEventListener('keydown', onKey, true);
+  };
+
+  const onKey = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+
+    if (e.key === 'Escape') {
+      stop();
+      btn.textContent = oldText;
+      toast('已取消');
+      return;
+    }
+
+    const key = normalizeKey(e);
+    if (!key) return; // 只按了修饰键，继续等
+
+    const mods = [];
+    if (e.ctrlKey) mods.push('ctrl');
+    if (e.altKey) mods.push('alt');
+    if (e.shiftKey) mods.push('shift');
+    if (e.metaKey) mods.push('super');
+    if (!mods.length) {
+      toast('必须至少带一个修饰键（Ctrl / Alt / Shift / Super）', true);
+      return;
+    }
+
+    stop();
+    const spec = [...mods, key].join('+');
+    try {
+      const res = await fetch('/api/hotkey', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ hotkey: spec }),
+      });
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.detail || `HTTP ${res.status}`);
+      }
+      state.hotkey = spec;
+      btn.textContent = prettyHotkey(spec);
+      toast(`快捷键已改为 ${prettyHotkey(spec)}`);
+    } catch (err) {
+      btn.textContent = oldText;
+      toast(`设置失败: ${err.message}`, true);
+    }
+  };
+
+  document.addEventListener('keydown', onKey, true);
 }
 
 async function refresh() {
