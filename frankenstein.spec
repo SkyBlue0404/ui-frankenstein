@@ -1,11 +1,17 @@
 # -*- mode: python ; coding: utf-8 -*-
 """PyInstaller 打包配置（Linux / Windows 通用）。
 
-    pyinstaller window-dashboard.spec
+    pyinstaller frankenstein.spec
 
 产物是单文件可执行程序，放在 dist/ 下：
-    Linux   → dist/window-dashboard
-    Windows → dist/window-dashboard.exe
+    Linux   → dist/frankenstein
+    Windows → dist/frankenstein.exe
+
+目录约定：
+    src/frankenstein/    Python 源码
+    assets/              前端素材（html / css / js）
+    build/               构建中间物（可删）
+    dist/                生成物（可删）
 """
 
 from PyInstaller.utils.hooks import collect_submodules
@@ -42,10 +48,11 @@ excludes = [
 
 a = Analysis(
     ["run.py"],
-    pathex=[],
+    # 源码在 src/ 下，run.py 用 sys.path.insert 动态加的路径静态分析跟不到
+    pathex=["src"],
     binaries=[],
     datas=[
-        ("wd/static", "wd/static"),
+        ("assets", "assets"),
         ("config.example.json", "."),
     ],
     hiddenimports=hiddenimports,
@@ -64,7 +71,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="window-dashboard",
+    name="frankenstein",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

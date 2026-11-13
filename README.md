@@ -1,4 +1,6 @@
-# Window Dashboard
+# Frankenstein
+
+> 缝合怪 —— 把好几个进程的界面缝到一起。
 
 把多个正在运行的工具窗口里**你关心的那一小块**（比如操作按钮栏、状态灯、日志尾部）抠出来，
 拼成一个**自适应**的网页面板。页面上点一下，事件会**回传到原窗口**——
@@ -190,15 +192,17 @@ Per-Monitor DPI Aware，避免高分屏下坐标偏移。
 
 ```bash
 pip install -r requirements.txt pyinstaller
-pyinstaller --noconfirm --clean window-dashboard.spec
+pyinstaller --noconfirm --clean frankenstein.spec
+# 或者用封装好的脚本（会先清理 build/ dist/）：
+python scripts/build.py
 ```
 
 产物是**单文件**，直接双击/运行即可（首次运行会在旁边自动生成 `config.json`）：
 
 | 平台 | 产物 |
 |---|---|
-| Linux | `dist/window-dashboard` |
-| Windows | `dist/window-dashboard.exe` |
+| Linux | `dist/frankenstein` |
+| Windows | `dist/frankenstein.exe` |
 
 > PyInstaller **不支持交叉编译** —— 在 Linux 上打不出 Windows 的 exe，反之亦然。
 > 仓库里带了 `.github/workflows/build.yml`，推到 GitHub 后会自动在两种原生
@@ -207,7 +211,8 @@ pyinstaller --noconfirm --clean window-dashboard.spec
 ## 常见问题
 
 **点击没反应？** 有些程序（游戏、部分 Electron/Qt 应用）会忽略合成事件。
-Windows 上可以换成 `PostMessage` 模式（见 `wd/platform/win32.py` 的 `post_click`）。
+Windows 上可以换成 `PostMessage` 模式（见 `src/frankenstein/platform/win32.py`
+的 `post_click`）。
 
 **帧率上不去？** 降低 `fps` 或 `quality`；tile 越多 CPU 占用越高，JPEG 编码是大头。
 
@@ -217,20 +222,30 @@ Windows 上可以换成 `PostMessage` 模式（见 `wd/platform/win32.py` 的 `p
 ## 目录
 
 ```
-run.py                 入口 / CLI
-config.json            你的配置（/setup 生成）
-wd/
-  server.py            FastAPI 路由 + MJPEG
-  capture.py           TileWorker 抓帧线程
-  config.py            配置加载 / 校验 / 原子写入
-  models.py            Rect / WindowInfo
+run.py                     入口 / CLI
+frankenstein.spec          PyInstaller 打包配置
+requirements.txt           Python 依赖
+config.example.json        示例配置
+config.json                你的配置（首次运行自动生成，已在 .gitignore）
+
+src/frankenstein/          源码
+  server.py                FastAPI 路由 + MJPEG + 全局热键
+  capture.py               TileWorker 抓帧线程
+  config.py                配置加载 / 校验 / 原子写入
+  models.py                Rect / WindowInfo
+  pin.py                   Snipaste 式贴图窗口
+  overlay.py               全屏框选遮罩
   platform/
-    base.py            后端接口
-    x11.py             Linux X11 实现
-    win32.py           Windows 实现
-  static/
-    index.html         主面板
-    setup.html         布局编辑器
-    app.js / setup.js  前端逻辑
-    style.css / setup.css
+    base.py                后端接口
+    x11.py                 Linux X11 实现
+    win32.py               Windows 实现
+
+assets/                    前端素材
+  html/                    canvas / pins / setup / index
+  css/                     style / canvas / setup
+  js/                      canvas / pins / setup / app
+
+scripts/build.py           一键打包（清理 + 构建）
+build/                     构建中间物（可删，已忽略）
+dist/                      生成物（可删，已忽略）
 ```

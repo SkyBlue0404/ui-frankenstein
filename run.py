@@ -23,8 +23,8 @@ if getattr(sys, "frozen", False):
 else:
     ROOT = Path(__file__).resolve().parent
     _BUNDLE = ROOT
-
-sys.path.insert(0, str(ROOT))
+    # 源码布局：<root>/src/frankenstein/...
+    sys.path.insert(0, str(ROOT / "src"))
 
 # Windows 控制台默认是 cp1252 / cp936，打印中文标题（--list-windows、--help）
 # 会直接抛 UnicodeEncodeError。冻结成 exe 后没有 PYTHONIOENCODING 兜底，
@@ -35,8 +35,8 @@ for _stream in (sys.stdout, sys.stderr):
     except (AttributeError, ValueError):
         pass
 
-from wd.config import Config  # noqa: E402
-from wd.platform import get_backend  # noqa: E402
+from frankenstein.config import Config  # noqa: E402
+from frankenstein.platform import get_backend  # noqa: E402
 
 
 def cmd_list_windows() -> int:
@@ -85,12 +85,12 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_list_windows()
 
     if args.select:
-        from wd.overlay import run_selector
+        from frankenstein.overlay import run_selector
 
         return run_selector(args.server, args.handle)
 
     if args.pin:
-        from wd.pin import run_pin
+        from frankenstein.pin import run_pin
 
         return run_pin(
             args.server, args.pin, scale=args.scale,
@@ -105,7 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             if example.exists():
                 config_path.write_text(example.read_text("utf-8"), "utf-8")
             else:
-                from wd.config import DEFAULT_CONFIG
+                from frankenstein.config import DEFAULT_CONFIG
 
                 config_path.write_text(
                     json.dumps(DEFAULT_CONFIG, ensure_ascii=False, indent=2), "utf-8"
@@ -123,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
 
     import uvicorn  # 延迟导入，--list-windows 时不需要
 
-    from wd.server import create_app
+    from frankenstein.server import create_app
 
     app = create_app(config_path)
     url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/"

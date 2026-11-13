@@ -17,7 +17,22 @@ from .capture import TileWorker
 from .config import Config
 from .platform import get_backend, get_hotkey_listener
 
-STATIC_DIR = Path(__file__).parent / "static"
+
+def _assets_dir() -> Path:
+    """素材目录（HTML / CSS / JS）。
+
+    源码布局：<root>/assets        （本文件在 <root>/src/frankenstein/）
+    冻结布局：<_MEIPASS>/assets
+    """
+    if getattr(sys, "frozen", False):
+        base = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+    else:
+        base = Path(__file__).resolve().parents[2]
+    return base / "assets"
+
+
+ASSETS_DIR = _assets_dir()
+HTML_DIR = ASSETS_DIR / "html"
 _BOUNDARY = b"--frame\r\n"
 
 
@@ -229,7 +244,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         else:
             cmd = [
                 sys.executable,
-                str(Path(__file__).resolve().parent.parent / "run.py"),
+                str(Path(__file__).resolve().parents[2] / "run.py"),
                 "--pin", tile_id, "--server", base, *extra,
             ]
         subprocess.Popen(cmd, start_new_session=True)
@@ -242,7 +257,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         else:
             cmd = [
                 sys.executable,
-                str(Path(__file__).resolve().parent.parent / "run.py"),
+                str(Path(__file__).resolve().parents[2] / "run.py"),
                 "--select", "--handle", str(handle), "--server", base,
             ]
         subprocess.Popen(cmd, start_new_session=True)
@@ -272,15 +287,15 @@ def create_app(config_path: str | Path) -> FastAPI:
 
     @app.get("/", include_in_schema=False)
     def index() -> FileResponse:
-        return FileResponse(STATIC_DIR / "canvas.html")
+        return FileResponse(HTML_DIR / "canvas.html")
 
     @app.get("/setup", include_in_schema=False)
     def setup_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "setup.html")
+        return FileResponse(HTML_DIR / "setup.html")
 
     @app.get("/pins", include_in_schema=False)
     def pins_page() -> FileResponse:
-        return FileResponse(STATIC_DIR / "pins.html")
+        return FileResponse(HTML_DIR / "pins.html")
 
     # ---- 状态 ----
 
@@ -468,7 +483,7 @@ def create_app(config_path: str | Path) -> FastAPI:
         else:
             cmd = [
                 sys.executable,
-                str(Path(__file__).resolve().parent.parent / "run.py"),
+                str(Path(__file__).resolve().parents[2] / "run.py"),
                 "--pin", tile_id,
                 "--server", base,
                 "--scale", str(pin_scale),
@@ -509,5 +524,5 @@ def create_app(config_path: str | Path) -> FastAPI:
             },
         )
 
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+    app.mount("/static", StaticFiles(directory=ASSETS_DIR), name="static")
     return app
