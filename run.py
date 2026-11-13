@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
+import subprocess
 import sys
 import threading
 import webbrowser
@@ -60,12 +62,84 @@ def cmd_list_windows() -> int:
     return 0
 
 
+# ---------------------------------------------------------------------------
+# 打开界面
+# ---------------------------------------------------------------------------
+
+# Chromium 系浏览器：它们的 --app 模式能开出**没有地址栏和标签页**的窗口，
+# 看起来就是个普通桌面程序，不需要用户自己找浏览器。
+_CHROMIUM_NAMES = [
+    "google-chrome", "google-chrome-stable", "chromium", "chromium-browser",
+    "brave-browser", "microsoft-edge", "microsoft-edge-stable", "vivaldi",
+]
+_CHROMIUM_WIN_PATHS = [
+    r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+]
+
+
+def _find_chromium() -> str | None:
+    for name in _CHROMIUM_NAMES:
+        exe = shutil.which(name)
+        if exe:
+            return exe
+    if sys.platform.startswith("win"):
+        for path in _CHROMIUM_WIN_PATHS:
+            if Path(path).exists():
+                return path
+    return None
+
+
+def _spawn(cmd: list[str]) -> bool:
+    try:
+        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform.startswith("win"):
+            # DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP：关掉控制台也不带走窗口
+            kwargs["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(cmd, **kwargs)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def open_ui(url: str, mode: str = "app") -> bool:
+    """打开操作界面。
+
+    mode="app"     优先用 Chromium 的 --app 开无地址栏窗口（像桌面程序）
+    mode="browser" 直接用系统默认浏览器
+
+    返回是否成功开出了 app 窗口。
+    """
+    if mode == "app":
+        exe = _find_chromium()
+        if exe:
+            if _spawn([
+                exe,
+                f"--app={url}",
+                "--window-size=1320,900",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-features=Translate",
+            ]):
+                return True
+        print("[i] 没找到 Chrome / Edge / Chromium，改用系统默认浏览器打开")
+    webbrowser.open(url)
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="把多个工具窗口的指定区域拼成一个自适应操作面板")
     parser.add_argument("-c", "--config", default=str(ROOT / "config.json"), help="配置文件路径")
     parser.add_argument("--host", default=None, help="监听地址（默认取配置里的 server.host）")
     parser.add_argument("-p", "--port", type=int, default=None, help="监听端口（默认取配置里的 server.port）")
-    parser.add_argument("--no-browser", action="store_true", help="启动后不自动打开浏览器")
+    parser.add_argument("--no-window", "--no-browser", dest="no_window", action="store_true",
+                        help="启动后不打开界面窗口（纯服务模式）")
+    parser.add_argument("--browser", action="store_true",
+                        help="用系统默认浏览器打开，而不是无地址栏的 app 窗口")
     parser.add_argument("--list-windows", action="store_true", help="列出当前窗口后退出")
     parser.add_argument("--pin", metavar="TILE_ID", default=None,
                         help="以贴图模式启动：把这个 tile 钉在桌面最上层（Snipaste 风格）")
@@ -128,13 +202,14 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(config_path)
     url = f"http://{'127.0.0.1' if host in ('0.0.0.0', '::') else host}:{port}/"
 
-    print(f"Window Dashboard  →  {url}")
+    print(f"Frankenstein  →  {url}")
     print(f"  编辑布局: {url}setup")
     print(f"  配置文件: {config_path.resolve()}")
     print("  Ctrl-C 退出")
 
-    if not args.no_browser:
-        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+    if not args.no_window:
+        mode = "browser" if args.browser else "app"
+        threading.Timer(0.8, lambda: open_ui(url, mode)).start()
 
     uvicorn.run(app, host=host, port=port, log_level="warning")
     return 0

@@ -32,22 +32,51 @@
 | 点击回传 | 浏览器把点击坐标换算成裁剪图像素 → 后端换算成窗口绝对坐标 → 注入系统事件 |
 | 自适应 | CSS Grid `auto-fill` + `object-fit: contain`，任意屏幕宽度自动换列，坐标按缩放比反算 |
 
-## 快速开始
+## 安装 / 运行
+
+**它是一个单文件程序，不需要你自己开浏览器。** 双击或命令行启动后会自动弹出一个
+**没有地址栏和标签页的窗口**（用 Chrome / Edge 的 `--app` 模式开），看起来就是个普通桌面程序。
+
+### Linux —— 安装到系统
+
+```bash
+python scripts/build.py     # 先打包
+./scripts/install.sh        # 装到 ~/.local：可执行文件 + 应用菜单项 + 图标
+```
+
+装完在应用菜单里搜 **Frankenstein / 缝合怪** 就能启动。卸载：
+
+```bash
+./scripts/install.sh --uninstall
+```
+
+### 任意平台 —— 直接跑单文件
+
+| 平台 | 产物 | 用法 |
+|---|---|---|
+| Linux | `dist/frankenstein` | `./dist/frankenstein` |
+| Windows | `dist/frankenstein.exe` | 双击 |
+
+首次运行会在可执行文件旁边自动生成 `config.json`。
+
+### 从源码运行
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate          # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-
-python run.py                       # 首次会提示复制示例配置
-# 打开 http://127.0.0.1:8777/setup 添加窗口
+python run.py
 ```
 
-也可以先看看机器上有哪些窗口，方便写正则：
+### 启动参数
 
-```bash
-python run.py --list-windows
-```
+| 参数 | 说明 |
+|---|---|
+| （默认） | 开一个无地址栏的 app 窗口 |
+| `--browser` | 用系统默认浏览器打开（带地址栏） |
+| `--no-window` | 不打开任何窗口，纯服务模式（配合远程访问） |
+| `--list-windows` | 列出当前窗口后退出，方便写匹配正则 |
+| `-p 9000` | 换端口 |
 
 ## 使用流程
 
@@ -244,8 +273,23 @@ assets/                    前端素材
   html/                    canvas / pins / setup / index
   css/                     style / canvas / setup
   js/                      canvas / pins / setup / app
+  icon.svg                 应用图标
 
 scripts/build.py           一键打包（清理 + 构建）
+scripts/install.sh         安装到 ~/.local（Linux 桌面菜单项 + 图标）
 build/                     构建中间物（可删，已忽略）
 dist/                      生成物（可删，已忽略）
 ```
+
+## 为什么界面是 HTML
+
+界面（画布拖拽、缩放手柄、MJPEG 视频流、自适应布局）用 HTML/CSS 写，
+但**用户不需要感知**：启动时自动用 Chromium 的 `--app` 模式开一个无边框窗口，
+没有地址栏、没有标签页，和原生程序看起来一样。
+
+这么选是因为一份界面代码同时覆盖 Linux 和 Windows，而且画布这类富交互
+用 Web 技术实现成本远低于 Tk/Qt。后端、贴图窗口、框选遮罩都是**原生的**
+（Tk + X11/Win32 API），只有主面板这一层走 Web。
+
+如果你确实需要完全内嵌（连 Chrome 都不依赖），可以装 `pywebview`，
+Linux 上还需要系统的 `gir1.2-webkit2-4.1`。
