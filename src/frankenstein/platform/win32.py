@@ -504,8 +504,16 @@ class HotkeyListener(threading.Thread):
         self._id = 0xB00B
         self.ok = False
         self._thread_id = 0
+        # grab 尝试结束后置位，调用方据此拿到真实注册结果
+        self.ready = threading.Event()
 
     def run(self) -> None:
+        try:
+            self._run()
+        finally:
+            self.ready.set()
+
+    def _run(self) -> None:
         self._thread_id = kernel32.GetCurrentThreadId()
         parts = [p.strip().lower() for p in str(self._hotkey).split("+") if p.strip()]
         mods = 0

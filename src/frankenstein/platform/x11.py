@@ -391,24 +391,33 @@ class X11Backend(PlatformBackend):
     def _ensure_active(
         self, win: Any, frame: Any, above_id: int | None, stack_ok: bool
     ) -> None:
-        """保证目标窗口处于激活状态，然后立刻把它塞回原堆叠位置。
+        """让目标窗口处于「焦点」状态，但**不把它抬到前台**。
 
-        Chromium / Electron（VS Code、Chrome、飞书等）**只处理「自己处于激活状态」
-        时的合成事件**，不激活就完全忽略。而激活必然伴随一次 raise，所以这里
-        「激活 → 轮询到焦点 → 马上塞回去」，把闪到前台的时间压到最短。
+        Chromium / Electron 只处理「自己处于焦点」时的合成事件。
+        实测 `XSetInputFocus` 能给焦点且**完全不改变堆叠顺序**（WM 也不会改回去），
+        所以这里不再走 EWMH 激活（那会 raise，导致屏幕上闪一下）。
 
-        GTK / Qt / 传统 X11 程序不需要激活，跳过能省掉 ~100ms 延迟。
+        只有 set_input_focus 失败时才退回 EWMH 激活（会闪，但至少能用）。
         """
         if self.click_mode != "event" or not _ACTIVATE_BEFORE_CLICK:
             return
         if not self._is_chromium(win):
-            return  # 非 Chromium 系：直接发事件就行，不用等激活
-        if not self._active_window():
-            # 整个会话没有焦点窗口（桌面/合成器异常、无人操作等）——
-            # 激活请求不会生效，再等就是纯浪费，直接发事件
-            return
+            return  # 非 Chromium 系直接发事件，不用管焦点
         if self._is_focused(win):
-            return  # 本来就激活，不闪
+            return
+
+        try:
+            win.set_input_focus(X.RevertToParent, X.CurrentTime)
+            self._dpy.sync()
+            time.sleep(0.02)
+            return
+        except Exception:  # noqa: BLE001
+            pass
+
+        # 兜底：EWMH 激活（会抬窗口）
+        active = self._active_window()
+        if not active:
+            return
         self._activate(win)
         self._wait_active(win, timeout=0.18)
         self._restore_stack(frame, above_id, stack_ok)
@@ -417,20 +426,28 @@ class X11Backend(PlatformBackend):
     def _restore_after_click(
         self, frame: Any, above_id: int | None, stack_ok: bool, prev: int | None, handle: int
     ) -> None:
-        """点击后把被程序自己抬起来的窗口塞回去，并还原输入焦点（后台执行）。"""
+        """点击后把被程序自己抬起来的窗口立刻塞回去（后台执行）。
+
+        程序通常在 ButtonPress 那一刻就 raise。所以先**立刻**还原一次，
+        再等 10ms 补一次（防它异步 raise），把可见闪烁压到 1 帧左右。
+        """
         try:
             with self._lock:
-                time.sleep(0.012)
                 if _RESTORE_STACK_AFTER_CLICK:
                     self._restore_stack(frame, above_id, stack_ok)
+                    time.sleep(0.010)
+                    self._restore_stack(frame, above_id, stack_ok)
+
                 if _RESTORE_FOCUS_AFTER_CLICK and prev and prev != handle:
                     if self._active_window() != prev:
-                        time.sleep(0.015)
                         try:
-                            self._activate(
-                                self._dpy.create_resource_object("window", int(prev))
+                            # 用 set_input_focus 而不是 EWMH 激活：不抬窗口
+                            prev_win = self._dpy.create_resource_object(
+                                "window", int(prev)
                             )
-                        except Exception:
+                            prev_win.set_input_focus(X.RevertToParent, X.CurrentTime)
+                            self._dpy.sync()
+                        except Exception:  # noqa: BLE001
                             pass
         except Exception:  # noqa: BLE001
             pass
@@ -657,8 +674,17 @@ class HotkeyListener(threading.Thread):
         self._dpy = display.Display()
         self._root = self._dpy.screen().root
         self.ok = False
+        # grab 尝试结束后置位（成功或失败都会置），调用方据此判断注册结果，
+        # 而不是「start() 了就当作成功」——被别的程序占用时 grab 会抛 BadAccess。
+        self.ready = threading.Event()
 
     def run(self) -> None:
+        try:
+            self._run()
+        finally:
+            self.ready.set()
+
+    def _run(self) -> None:
         parsed = parse_hotkey(self._hotkey)
         if not parsed:
             print(f"[!] 无法解析快捷键: {self._hotkey}", file=sys.stderr)
@@ -666,11 +692,12 @@ class HotkeyListener(threading.Thread):
         key_name, mods = parsed
         keycode = self._dpy.keysym_to_keycode(keysym_for(key_name))
         if not keycode:
-            print(f"[!] 找不到键位: {key_name}", file=sys.stderr)
+            print(f"[!] 找不到键位: {key_name}（{self._hotkey}）", file=sys.stderr)
             return
 
         # CapsLock / NumLock 会改动 modifier 状态位，这几种组合都要 grab
         grabbed = 0
+        last_error = ""
         for extra in (0, X.LockMask, X.Mod2Mask, X.LockMask | X.Mod2Mask):
             try:
                 self._root.grab_key(
@@ -678,10 +705,12 @@ class HotkeyListener(threading.Thread):
                 )
                 grabbed += 1
             except Exception as exc:  # noqa: BLE001
-                print(f"[!] grab_key 失败: {exc}", file=sys.stderr)
+                last_error = str(exc)
         self._dpy.sync()
         self.ok = grabbed > 0
         if not self.ok:
+            print(f"[!] 快捷键注册失败（可能被其他程序占用）: {self._hotkey}  {last_error}",
+                  file=sys.stderr)
             return
         print(f"[i] 全局快捷键已注册: {self._hotkey.upper()}")
 

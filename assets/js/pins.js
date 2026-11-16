@@ -35,17 +35,33 @@ function prettyHotkey(spec) {
 }
 
 function normalizeKey(e) {
-  const k = e.key;
-  if (k === ' ' || e.code === 'Space') return 'space';
-  if (/^F\d{1,2}$/.test(k)) return k.toLowerCase();
-  if (k.length === 1) return k.toLowerCase();
+  // 优先用 e.code（物理键位）：这样 Shift+1 不会变成 "!"，
+  // 也不会因为输入法/布局差异拿到奇怪字符
+  const code = e.code || '';
+  if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase();
+  if (/^Digit[0-9]$/.test(code)) return code.slice(5);
+  if (/^Numpad[0-9]$/.test(code)) return code.slice(6);
+  if (/^F([1-9]|1[0-9]|2[0-4])$/.test(code)) return code.toLowerCase();
+
   const named = {
-    Tab: 'tab', Enter: 'enter', Escape: 'escape', Backspace: 'backspace',
-    Insert: 'insert', Delete: 'delete', Home: 'home', End: 'end',
-    PageUp: 'pageup', PageDown: 'pagedown',
+    Space: 'space', Tab: 'tab', Enter: 'enter', NumpadEnter: 'enter',
+    Escape: 'escape', Backspace: 'backspace', Insert: 'insert', Delete: 'delete',
+    Home: 'home', End: 'end', PageUp: 'pageup', PageDown: 'pagedown',
     ArrowUp: 'up', ArrowDown: 'down', ArrowLeft: 'left', ArrowRight: 'right',
+    Minus: 'minus', Equal: 'equal', Comma: 'comma', Period: 'period',
+    Slash: 'slash', Backslash: 'backslash', Backquote: 'grave',
+    BracketLeft: 'bracketleft', BracketRight: 'bracketright',
+    Semicolon: 'semicolon', Quote: 'apostrophe',
   };
-  return named[k] || '';
+  if (named[code]) return named[code];
+
+  // 没有 code 的兜底
+  const k = e.key;
+  if (!k) return '';
+  if (k === ' ') return 'space';
+  if (/^F\d{1,2}$/.test(k)) return k.toLowerCase();
+  if (/^[A-Za-z0-9]$/.test(k)) return k.toLowerCase();
+  return '';
 }
 
 function recordHotkey() {
@@ -54,7 +70,7 @@ function recordHotkey() {
   const btn = $('#hotkey');
   const oldText = btn.textContent;
   btn.classList.add('recording');
-  btn.textContent = '按下新的组合键…';
+  btn.textContent = '按下快捷键…';
 
   const stop = () => {
     recording = false;
@@ -66,7 +82,7 @@ function recordHotkey() {
     e.preventDefault();
     e.stopPropagation();
 
-    if (e.key === 'Escape') {
+    if (e.key === 'Escape' && !e.ctrlKey && !e.altKey && !e.shiftKey && !e.metaKey) {
       stop();
       btn.textContent = oldText;
       toast('已取消');
@@ -74,16 +90,19 @@ function recordHotkey() {
     }
 
     const key = normalizeKey(e);
-    if (!key) return; // 只按了修饰键，继续等
+    if (!key) return; // 只按了修饰键或不支持的键，继续等
 
     const mods = [];
     if (e.ctrlKey) mods.push('ctrl');
     if (e.altKey) mods.push('alt');
     if (e.shiftKey) mods.push('shift');
     if (e.metaKey) mods.push('super');
-    if (!mods.length) {
-      toast('必须至少带一个修饰键（Ctrl / Alt / Shift / Super）', true);
-      return;
+
+    // 单字母/数字会拦截正常输入，提醒一下但允许设置
+    if (!mods.length && /^[a-z0-9]$/.test(key)) {
+      if (!confirm(`「${key.toUpperCase()}」是普通按键，设为全局快捷键后会拦截所有输入。\n确定要用它吗？`)) {
+        return;
+      }
     }
 
     stop();

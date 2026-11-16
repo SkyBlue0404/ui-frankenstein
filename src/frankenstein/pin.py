@@ -91,6 +91,8 @@ class PinWindow:
         self._drag_origin: tuple[int, int, int, int] | None = None
         self._dragging = False
         self._closed = False
+        self._menu_open = False
+        self._popup: "_PopupMenu | None" = None
 
         first = self._wait_first_frame()
         self._img_size = first.size
@@ -194,10 +196,13 @@ class PinWindow:
     def _keep_on_top(self) -> None:
         if self._closed:
             return
-        try:
-            self.root.lift()
-        except tk.TclError:
-            return
+        # 右键菜单弹出期间不要 lift：贴图自己是 topmost，
+        # 一提升就会盖住菜单，导致点菜单项落到投影上（穿透）。
+        if not self._menu_open:
+            try:
+                self.root.lift()
+            except tk.TclError:
+                return
         self.root.after(1500, self._keep_on_top)
 
     # ---- 交互 ----
@@ -215,6 +220,8 @@ class PinWindow:
             w.bind("<Leave>", lambda e: self.frame.configure(bg="#4c8dff"))
 
     def _on_press(self, evt: "tk.Event") -> None:
+        if self._menu_open:  # 菜单弹出时，落在贴图上的事件一律忽略
+            return
         self._drag_origin = (evt.x_root, evt.y_root, self.root.winfo_x(), self.root.winfo_y())
         self._dragging = False
 
@@ -229,6 +236,10 @@ class PinWindow:
             self.root.geometry(f"+{wx + dx}+{wy + dy}")
 
     def _on_release(self, evt: "tk.Event") -> None:
+        if self._menu_open:  # 右键菜单刚关掉时可能漏过来的事件，不要回传
+            self._drag_origin = None
+            self._dragging = False
+            return
         was_drag = self._dragging
         self._drag_origin = None
         self._dragging = False
@@ -287,23 +298,35 @@ class PinWindow:
     # ---- 右键菜单 ----
 
     def _build_menu(self) -> None:
-        self.menu = tk.Menu(self.root, tearoff=0)
-        self.menu.add_command(label="放大", command=lambda: self._zoom(1.25))
-        self.menu.add_command(label="缩小", command=lambda: self._zoom(0.8))
-        self.menu.add_command(label="原始大小", command=lambda: self._set_scale(1.0))
-        self.menu.add_separator()
-        for pct in (100, 85, 70, 50, 30):
-            self.menu.add_command(
-                label=f"不透明度 {pct}%", command=lambda p=pct: self._opacity(p)
-            )
-        self.menu.add_separator()
-        self.menu.add_command(label="关闭贴图", command=self.close)
+        """菜单项只描述数据，实际弹出用的是自绘的 _PopupMenu（见下）。"""
+        self._menu_items = [
+            ("放大", lambda: self._zoom(1.25)),
+            ("缩小", lambda: self._zoom(0.8)),
+            ("原始大小", lambda: self._set_scale(1.0)),
+            None,
+            ("不透明度 100%", lambda: self._opacity(100)),
+            ("不透明度 75%", lambda: self._opacity(75)),
+            ("不透明度 50%", lambda: self._opacity(50)),
+            None,
+            ("关闭贴图", self.close),
+        ]
 
     def _on_menu(self, evt: "tk.Event") -> None:
+        if self._menu_open:
+            return
+        self._menu_open = True
         try:
-            self.menu.tk_popup(evt.x_root, evt.y_root)
-        finally:
-            self.menu.grab_release()
+            self._popup = _PopupMenu(
+                self.root, self._menu_items, on_close=self._menu_closed
+            )
+            self._popup.post(evt.x_root, evt.y_root)
+        except Exception:  # noqa: BLE001
+            self._menu_open = False
+            raise
+
+    def _menu_closed(self) -> None:
+        self._menu_open = False
+        self._popup = None
 
     def _zoom(self, factor: float) -> None:
         self._set_scale(self.scale * factor)
@@ -348,6 +371,113 @@ class PinWindow:
             self.root.mainloop()
         finally:
             self._poller.stop()
+
+
+# ---------------------------------------------------------------------------
+# 自绘右键菜单
+# ---------------------------------------------------------------------------
+
+
+class _PopupMenu:
+    """极简卡片式右键菜单。
+
+    不用 tk.Menu，因为原生菜单跟随系统主题、边框厚重，也压不住 topmost 的贴图。
+    自绘一个无边框 Toplevel：白底 + 细边 + 悬停淡蓝，视觉上干净很多。
+    """
+
+    _BG = "#ffffff"
+    _BORDER = "#e4e9f2"
+    _TEXT = "#1f2430"
+    _HOVER = "#f0f5ff"
+    _DANGER = "#d94a5b"
+    _SEP = "#eef2f7"
+
+    def __init__(self, master: "tk.Misc", items: list, on_close) -> None:
+        self._on_close = on_close
+        self._closed = False
+
+        self.top = tk.Toplevel(master)
+        self.top.overrideredirect(True)
+        try:
+            self.top.attributes("-topmost", True)
+        except tk.TclError:
+            pass
+        self.top.configure(bg=self._BORDER)  # 1px 边框
+
+        body = tk.Frame(self.top, bg=self._BG)
+        body.pack(fill="both", expand=True, padx=1, pady=1)
+
+        for item in items:
+            if item is None:
+                sep = tk.Frame(body, bg=self._SEP, height=1)
+                sep.pack(fill="x", padx=10, pady=4)
+                continue
+
+            label, cmd = item
+            danger = label.startswith("关闭")
+            row = tk.Label(
+                body,
+                text=label,
+                anchor="w",
+                bg=self._BG,
+                fg=self._DANGER if danger else self._TEXT,
+                font=("Sans", 10),
+                padx=16,
+                pady=6,
+                cursor="hand2",
+                bd=0,
+                highlightthickness=0,
+            )
+            row.pack(fill="x")
+            row.bind("<Enter>", lambda e, r=row: r.configure(bg=self._HOVER))
+            row.bind("<Leave>", lambda e, r=row: r.configure(bg=self._BG))
+            row.bind("<ButtonRelease-1>", lambda e, c=cmd: self._run(c))
+
+        self.top.bind("<ButtonRelease-1>", self._maybe_close)
+        self.top.bind("<Escape>", lambda e: self.close())
+
+    # ---- 行为 ----
+
+    def _run(self, cmd) -> None:
+        self.close()
+        try:
+            cmd()
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _maybe_close(self, evt: "tk.Event") -> None:
+        # grab 之后窗口外的点击也会送到这里，坐标落在 [0,w) 之外
+        w, h = self.top.winfo_width(), self.top.winfo_height()
+        if evt.x < 0 or evt.y < 0 or evt.x >= w or evt.y >= h:
+            self.close()
+
+    def post(self, x: int, y: int) -> None:
+        self.top.update_idletasks()
+        w, h = self.top.winfo_reqwidth(), self.top.winfo_reqheight()
+        sw, sh = self.top.winfo_screenwidth(), self.top.winfo_screenheight()
+        x = max(6, min(int(x), sw - w - 6))
+        y = max(6, min(int(y), sh - h - 6))
+        self.top.geometry(f"+{x}+{y}")
+        self.top.deiconify()
+        self.top.lift()
+        try:
+            self.top.grab_set()  # 捕获外部点击，好让点空白处能关掉
+        except tk.TclError:
+            pass
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self.top.grab_release()
+        except tk.TclError:
+            pass
+        try:
+            self.top.destroy()
+        except tk.TclError:
+            pass
+        self._on_close()
 
 
 # ---------------------------------------------------------------------------

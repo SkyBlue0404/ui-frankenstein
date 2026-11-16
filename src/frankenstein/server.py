@@ -110,9 +110,7 @@ def _valid_hotkey(spec: str) -> bool:
     parts = [p for p in spec.split("+") if p.strip()]
     if not parts:
         return False
-    # 至少要有一个修饰键，否则会抢走普通按键
-    if len(parts) < 2:
-        return False
+    # 允许单键（F9、space 等）；单字母会拦截正常输入，前端会额外提醒
     return bool(_HOTKEY_RE.match("+".join(p.strip().lower() for p in parts)))
 
 
@@ -182,24 +180,43 @@ class Runtime:
     # ---- 全局快捷键 ----
 
     def restart_hotkey(self, spec: str) -> bool:
-        """换一个全局快捷键：停掉旧的监听器，按新键重新 grab。"""
+        """换一个全局快捷键：停掉旧的监听器，按新键重新 grab。
+
+        返回**真实的注册结果**——被别的程序占用时 grab 会失败，
+        不能只看 start() 有没有抛异常。
+        """
         with self.lock:
-            if self.hotkey is not None:
+            old = self.hotkey
+            self.hotkey = None
+            if old is not None:
                 try:
-                    self.hotkey.stop()
+                    old.stop()
+                    # 等旧连接关掉、把 grab 释放掉，否则新 grab 会撞 BadAccess
+                    old.join(timeout=1.0)
                 except Exception:  # noqa: BLE001
                     pass
-                self.hotkey = None
+
             if self._hotkey_cb is None:
                 return False
             try:
-                self.hotkey = get_hotkey_listener(self._hotkey_cb, spec)
+                hk = get_hotkey_listener(self._hotkey_cb, spec)
             except Exception:  # noqa: BLE001
-                self.hotkey = None
                 return False
-            if self.hotkey is None:
+            if hk is None:
                 return False
-            self.hotkey.start()
+
+            hk.start()
+            ready = getattr(hk, "ready", None)
+            if ready is not None:
+                ready.wait(timeout=2.0)
+            if not bool(getattr(hk, "ok", False)):
+                try:
+                    hk.stop()
+                except Exception:  # noqa: BLE001
+                    pass
+                return False
+
+            self.hotkey = hk
             return True
 
     # ---- 瞬时 tile（模式 A） ----
@@ -491,10 +508,14 @@ def create_app(config_path: str | Path) -> FastAPI:
         spec = body.hotkey.strip().lower()
         if not _valid_hotkey(spec):
             raise HTTPException(
-                400, "快捷键至少要有一个修饰键（Ctrl / Alt / Shift / Super）+ 一个按键，例如 ctrl+shift+f9"
+                400,
+                f"不支持这个按键「{body.hotkey}」。可用：字母/数字、F1~F24、方向键、"
+                "space/tab/enter/delete 等，可加 Ctrl/Alt/Shift/Super 组合",
             )
         if not rt.restart_hotkey(spec):
-            raise HTTPException(500, "注册失败，这个组合可能已被其他程序占用")
+            raise HTTPException(
+                500, f"注册失败：{spec} 可能已被其他程序占用，换一个组合试试"
+            )
         cfg.data["defaults"]["hotkey"] = spec
         cfg.save()
         return {"ok": True, "hotkey": spec}
