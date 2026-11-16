@@ -52,7 +52,7 @@ class X11Backend(PlatformBackend):
         self._local = threading.local()  # mss 实例不能跨线程共享
         # "event"    = XSendEvent 投递（不动鼠标，默认）
         # "physical" = warp + XTest 物理注入（兼容自绘 UI，但会拽动鼠标）
-        self.click_mode = "event"
+        self.click_mode = "physical"
         self._atom_net_name = self._dpy.intern_atom("_NET_WM_NAME")
         self._atom_utf8 = self._dpy.intern_atom("UTF8_STRING")
         self._atom_client_list = self._dpy.intern_atom("_NET_CLIENT_LIST")
@@ -587,19 +587,23 @@ class X11Backend(PlatformBackend):
         """把指针移到目标处；必要时激活窗口。返回需要事后还原的窗口 id。"""
         self._root.warp_pointer(sx, sy)
         self._dpy.sync()
-        time.sleep(0.03)
+        time.sleep(0.02)
 
         if self._is_on_top(win) and self._is_focused(win):
-            return None  # 已经既在最上层又有焦点，直接点，不闪烁
+            # 目标本来就在最前面且已聚焦 —— 直接点，完全没有闪烁
+            return None
 
         prev = self._active_window() if _RESTORE_FOCUS_AFTER_CLICK else None
         self._activate(win)
-        # WM 激活窗口时会短暂 server-grab，此时注入的 XTest 事件会被 WM 吞掉。
-        # 必须等它完成（含动画）再重新对齐指针。
-        time.sleep(0.35)
+        # 轮询等它真的到最前，而不是死等一个固定时长
+        # （实测通常 10~30ms，之前固定 350ms 那种闪一下就很久）
+        for _ in range(40):
+            if self._is_on_top(win):
+                break
+            time.sleep(0.006)
         self._root.warp_pointer(sx, sy)
         self._dpy.sync()
-        time.sleep(0.08)
+        time.sleep(0.02)
         return prev
 
     def _raw_click(self, sx: int, sy: int, xbtn: int, double: bool) -> None:

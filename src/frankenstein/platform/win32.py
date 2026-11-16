@@ -184,7 +184,7 @@ class Win32Backend(PlatformBackend):
     def __init__(self) -> None:
         _enable_dpi_awareness()
         self._lock = threading.RLock()
-        self.click_mode = "event"
+        self.click_mode = "physical"
         self._dwm = None
         try:
             self._dwm = ctypes.WinDLL("dwmapi")

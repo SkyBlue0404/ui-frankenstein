@@ -22,7 +22,7 @@ class PlatformBackend(ABC):
     #                 **不移动物理鼠标**，默认。
     #   "physical" —— 物理注入（X11: warp+XTest / Windows: SetCursorPos+mouse_event），
     #                 兼容性最好，但会把用户的鼠标拽到目标窗口上。
-    click_mode = "event"
+    click_mode = "physical"
 
     # ---- 枚举 ----
 

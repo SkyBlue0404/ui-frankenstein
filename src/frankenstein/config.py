@@ -14,7 +14,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "fps": 12,
         "quality": 80,
         "capture": "window",
-        "click_mode": "event",
+        "click_mode": "physical",
         "hotkey": "ctrl+alt+p",
     },
     "layout": {"min_tile_px": 260, "gap_px": 10},
