@@ -302,12 +302,19 @@ class RegionSelector:
         if self.sel and self._inside(evt.x, evt.y):
             self._commit()
 
-    def _key(self, evt: "tk.Event") -> None:
+    def _key(self, evt: "tk.Event") -> str:
         if evt.keysym == "Escape":
             self._cancel()
-        elif evt.keysym in ("Return", "KP_Enter"):
-            if self.sel:
-                self._commit()
+            return "break"
+        if evt.keysym in ("Return", "KP_Enter") and self.sel:
+            self._commit()
+            return "break"
+        return ""
+
+    def _on_right(self, _evt: "tk.Event") -> str:
+        """右键 = 取消（Snipaste 的习惯）。"""
+        self._cancel()
+        return "break"
 
     # ---- 提交 / 取消 ----
 
@@ -384,11 +391,26 @@ class RegionSelector:
         self.canvas.bind("<B1-Motion>", self._motion)
         self.canvas.bind("<ButtonRelease-1>", self._release)
         self.canvas.bind("<Double-Button-1>", self._double)
-        self.root.bind("<Escape>", self._key)
+
+        # 右键取消：不依赖键盘焦点，任何时候都能退
+        for w in (self.root, self.canvas):
+            w.bind("<ButtonPress-3>", self._on_right)
+            w.bind("<Button-3>", self._on_right)
+            w.bind("<Escape>", self._key)
         self.root.bind("<Return>", self._key)
         self.root.bind("<KP_Enter>", self._key)
+        # 再加一层应用级绑定：即使焦点落在子控件上，Esc 也能退
+        self.root.bind_all("<Escape>", self._key)
 
+        # 遮罩是模态的：grab 之后键盘事件必定送到这里，Esc 才稳定有效。
+        # overrideredirect 窗口默认可能拿不到输入焦点。
+        self.root.update_idletasks()
+        self.canvas.focus_set()
         self.root.focus_force()
+        try:
+            self.root.grab_set()
+        except tk.TclError:
+            pass
         self.root.lift()
 
 
