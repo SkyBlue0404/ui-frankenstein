@@ -31,6 +31,8 @@ hiddenimports += [
     # Pillow 的 Tk 集成靠一个动态导入的模块，静态分析发现不了，
     # 不显式加进来，贴图窗口在打包版里会报 No module named 'PIL._tkinter_finder'
     "PIL._tkinter_finder",
+    # pystray 间接用到 pkg_resources，后者启动时要 platformdirs
+    "platformdirs",
 ]
 
 # 平台相关的可选依赖：Linux 用 Xlib，Windows 用 ctypes（内置）。
@@ -44,6 +46,12 @@ excludes = [
     "scipy",
     "pandas",
     "IPython",
+    # gi / GTK 不打进包里：PyInstaller 会把整套 typelib 和 .so 拖进来，
+    # 单文件从 32MB 膨胀到 138MB。托盘改为运行时从系统 dist-packages 加载。
+    "gi",
+    "gi.repository",
+    "cairo",
+    "pydoc_data",
 ]
 
 a = Analysis(

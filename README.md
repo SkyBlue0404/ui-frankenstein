@@ -50,18 +50,34 @@ python scripts/build.py     # 先打包
 ./scripts/install.sh --uninstall
 ```
 
-### 后台常驻（像 Snipaste 一样）
+### 前台 / 后台两种形态
 
-安装脚本会顺带装一个**登录自启的后台守护**：不占屏幕、不弹窗口，只保留全局快捷键。
-想用的时候按快捷键框一下，或点应用菜单的图标唤出面板。
+**后台模式**（登录自启）：顶部状态栏（Windows 是右下角托盘区）常驻一个
+**Frankenstein 图标**。不占屏幕、不弹窗口。右键图标：
+
+- **打开面板** —— 切到前台
+- **截取区域** —— 等同按快捷键
+- **设置快捷键** —— 打开 `/pins` 录制
+- **退出 Frankenstein**
+
+**前台模式**：打开的面板是独立窗口（无地址栏、无标签页），
+并且在左侧 **dock 里有自己的 Frankenstein 图标** —— 因为窗口用独立浏览器 profile
+启动了 `--class=frankenstein`，配合 `.desktop` 的 `StartupWMClass` 被识别成独立应用。
 
 ```bash
 frankenstein              # 启动并打开面板（后台已在跑就只弹面板）
-frankenstein --no-window  # 只跑后台（自启用的就是这条）
+frankenstein --tray       # 后台常驻 + 托盘图标（自启用的就是这条）
+frankenstein --no-window  # 纯后台，连托盘都不要
 frankenstein --quit       # 关掉后台实例
+frankenstein --open-only --page pins   # 只打开 /pins 页
 ```
 
 不想要自启：`./scripts/install.sh --no-autostart`。
+
+> 托盘依赖 `pystray`，Linux 上还需要系统的 `gir1.2-appindicator3-0.1`
+> 和 `python3-gi`（Ubuntu 通常自带）。打包版**故意没有**把 GTK 打进去
+> （会让单文件从 37MB 膨胀到 138MB），运行时从系统加载；没有就静默不显示托盘，
+> 其余功能照常。
 
 ### 快捷键可自定义
 

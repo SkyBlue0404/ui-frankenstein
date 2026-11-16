@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -107,6 +108,24 @@ def _spawn(cmd: list[str]) -> bool:
         return False
 
 
+def _ui_profile_dir() -> Path:
+    """app 窗口用**独立**的浏览器 profile。
+
+    必须独立：Chrome 的 --class 只在新起浏览器进程时生效，复用已有进程会被忽略。
+    独立 profile 后窗口的 WM_CLASS 才是 frankenstein，左侧 dock 才会显示我们自己的图标。
+    """
+    if sys.platform.startswith("win"):
+        base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
+    else:
+        base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
+    path = base / "frankenstein" / "chrome-profile"
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        pass
+    return path
+
+
 def open_ui(url: str, mode: str = "app") -> bool:
     """打开操作界面。
 
@@ -121,6 +140,10 @@ def open_ui(url: str, mode: str = "app") -> bool:
             if _spawn([
                 exe,
                 f"--app={url}",
+                f"--user-data-dir={_ui_profile_dir()}",
+                # 让窗口的 WM_CLASS 变成 frankenstein，
+                # 这样左侧 dock 会显示我们自己的图标（配合 .desktop 的 StartupWMClass）
+                "--class=frankenstein",
                 "--window-size=1320,900",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -130,6 +153,24 @@ def open_ui(url: str, mode: str = "app") -> bool:
         print("[i] 没找到 Chrome / Edge / Chromium，改用系统默认浏览器打开")
     webbrowser.open(url)
     return False
+
+
+def _spawn_daemon() -> bool:
+    """在后台拉一个 --no-window 的守护进程。"""
+    if getattr(sys, "frozen", False):
+        cmd = [sys.executable, "--no-window"]
+    else:
+        cmd = [sys.executable, str(ROOT / "run.py"), "--no-window"]
+    try:
+        kwargs: dict = {"stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
+        if sys.platform.startswith("win"):
+            kwargs["creationflags"] = 0x00000008 | 0x00000200
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen(cmd, **kwargs)
+        return True
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _already_running(url: str) -> bool:
@@ -154,6 +195,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="只打开面板（要求后台已有实例在跑），不启动服务")
     parser.add_argument("--quit", action="store_true",
                         help="退出正在后台运行的实例")
+    parser.add_argument("--tray", action="store_true",
+                        help="后台常驻 + 系统托盘图标（右键可切前台 / 设快捷键 / 退出）")
+    parser.add_argument("--page", default="",
+                        choices=["", "canvas", "pins", "setup"],
+                        help="--open-only / --tray 打开面板时进哪个页面")
     parser.add_argument("--list-windows", action="store_true", help="列出当前窗口后退出")
     parser.add_argument("--pin", metavar="TILE_ID", default=None,
                         help="以贴图模式启动：把这个 tile 钉在桌面最上层（Snipaste 风格）")
@@ -220,11 +266,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[!] 没有运行中的实例（{exc}）", file=sys.stderr)
             return 1
 
+    # 托盘模式：确保后台在跑，然后本进程常驻托盘
+    if args.tray:
+        if not _already_running(url):
+            if not _spawn_daemon():
+                print("[!] 无法启动后台服务", file=sys.stderr)
+                return 1
+            for _ in range(80):
+                if _already_running(url):
+                    break
+                time.sleep(0.1)
+        from frankenstein.tray import run_tray
+
+        return run_tray(url)
+
     # 已经有实例在跑（后台守护模式）：只把面板弹出来，不再抢端口
     if _already_running(url):
         print(f"[i] Frankenstein 已经在后台运行：{url}")
         if not args.no_window:
-            open_ui(url, "browser" if args.browser else "app")
+            page = "" if args.page == "canvas" else args.page
+            target = url if not page else url.rstrip("/") + "/" + page
+            open_ui(target, "browser" if args.browser else "app")
         return 0
 
     if args.open_only:
