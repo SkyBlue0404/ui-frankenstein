@@ -403,6 +403,10 @@ class X11Backend(PlatformBackend):
             return
         if not self._is_chromium(win):
             return  # 非 Chromium 系：直接发事件就行，不用等激活
+        if not self._active_window():
+            # 整个会话没有焦点窗口（桌面/合成器异常、无人操作等）——
+            # 激活请求不会生效，再等就是纯浪费，直接发事件
+            return
         if self._is_focused(win):
             return  # 本来就激活，不闪
         self._activate(win)
