@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import urllib.request
 import webbrowser
 from pathlib import Path
