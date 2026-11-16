@@ -391,33 +391,24 @@ class X11Backend(PlatformBackend):
     def _ensure_active(
         self, win: Any, frame: Any, above_id: int | None, stack_ok: bool
     ) -> None:
-        """让目标窗口处于「焦点」状态，但**不把它抬到前台**。
+        """让 Chromium / Electron 认为自己是「激活」状态。
 
-        Chromium / Electron 只处理「自己处于焦点」时的合成事件。
-        实测 `XSetInputFocus` 能给焦点且**完全不改变堆叠顺序**（WM 也不会改回去），
-        所以这里不再走 EWMH 激活（那会 raise，导致屏幕上闪一下）。
+        必须走 EWMH 激活（_NET_ACTIVE_WINDOW）：它会让 WM 真正标记窗口为 active
+        并推 `_NET_WM_STATE_FOCUSED`，Chromium 才会处理合成事件。
+        只用 XSetInputFocus 不够 —— 焦点给了，但 Chromium 的 IsActive 仍是 false，
+        点击会被直接丢掉（这是实测踩过的坑）。
 
-        只有 set_input_focus 失败时才退回 EWMH 激活（会闪，但至少能用）。
+        代价是激活时窗口会被 raise 一下，所以紧接着就把它塞回原位置。
         """
         if self.click_mode != "event" or not _ACTIVATE_BEFORE_CLICK:
             return
         if not self._is_chromium(win):
             return  # 非 Chromium 系直接发事件，不用管焦点
+        if not self._active_window():
+            return  # 会话根本没有焦点窗口，激活不会生效，直接发事件
         if self._is_focused(win):
             return
 
-        try:
-            win.set_input_focus(X.RevertToParent, X.CurrentTime)
-            self._dpy.sync()
-            time.sleep(0.02)
-            return
-        except Exception:  # noqa: BLE001
-            pass
-
-        # 兜底：EWMH 激活（会抬窗口）
-        active = self._active_window()
-        if not active:
-            return
         self._activate(win)
         self._wait_active(win, timeout=0.18)
         self._restore_stack(frame, above_id, stack_ok)
