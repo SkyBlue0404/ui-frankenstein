@@ -97,6 +97,10 @@ class HotkeyBody(BaseModel):
     hotkey: str
 
 
+class ClickModeBody(BaseModel):
+    mode: str
+
+
 _HOTKEY_RE = re.compile(
     r"^(?:(?:ctrl|control|alt|shift|super|win|meta)\+)*"
     r"(?:[a-z0-9]|f[1-9]|f1[0-9]|f2[0-4]|space|tab|enter|escape|insert|delete|home|end|"
@@ -407,6 +411,7 @@ def create_app(config_path: str | Path) -> FastAPI:
             "platform": rt.backend.name,
             "layout": cfg.layout,
             "hotkey": cfg.defaults.get("hotkey", "ctrl+alt+p"),
+            "click_mode": getattr(rt.backend, "click_mode", "event"),
             "tiles": [w.status() for w in workers],
         }
 
@@ -519,6 +524,24 @@ def create_app(config_path: str | Path) -> FastAPI:
         cfg.data["defaults"]["hotkey"] = spec
         cfg.save()
         return {"ok": True, "hotkey": spec}
+
+    @app.put("/api/click-mode")
+    def api_click_mode(body: ClickModeBody) -> dict[str, Any]:
+        """切换点击注入方式，立即生效。
+
+        event    —— 直接把事件投递给窗口（不动物理鼠标），
+                    但部分 Electron/Qt 程序会丢弃合成事件
+        physical —— 真实的鼠标注入（XTest），兼容性最好；
+                    会短暂挪动指针，点完自动挪回原处
+        """
+        mode = body.mode.strip().lower()
+        if mode not in ("event", "physical"):
+            raise HTTPException(400, "mode 只能是 'event' 或 'physical'")
+        rt.backend.click_mode = mode
+        cfg.data["defaults"]["click_mode"] = mode
+        cfg.save()
+        print(f"[i] 点击方式切换为: {mode}")
+        return {"ok": True, "mode": mode}
 
     @app.post("/api/capture-focus")
     def api_capture_focus() -> dict[str, Any]:
@@ -653,6 +676,7 @@ def create_app(config_path: str | Path) -> FastAPI:
             else:
                 worker.scroll(body.x, body.y, body.delta)
         except Exception as exc:  # noqa: BLE001
+            print(f"[!] input 失败 {tile_id}: {exc}", file=sys.stderr)
             raise HTTPException(400, f"input failed: {exc}") from exc
         return {"ok": True}
 

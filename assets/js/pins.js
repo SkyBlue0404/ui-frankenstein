@@ -15,8 +15,37 @@ async function boot() {
     } catch { /* 进程已经没了 */ }
     toast('已退出后台');
   });
+  document.querySelectorAll('#clickmode button').forEach((b) => {
+    b.addEventListener('click', () => setClickMode(b.dataset.mode));
+  });
   await refresh();
   setInterval(refresh, 2500);
+}
+
+/* ---------------- 点击方式 ---------------- */
+
+function paintClickMode(mode) {
+  document.querySelectorAll('#clickmode button').forEach((b) => {
+    b.classList.toggle('on', b.dataset.mode === mode);
+  });
+}
+
+async function setClickMode(mode) {
+  try {
+    const res = await fetch('/api/click-mode', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => ({}));
+      throw new Error(d.detail || `HTTP ${res.status}`);
+    }
+    paintClickMode(mode);
+    toast(mode === 'physical' ? '已切换为物理注入（点完鼠标会归位）' : '已切换为事件投递');
+  } catch (err) {
+    toast(`切换失败: ${err.message}`, true);
+  }
 }
 
 /* ---------------- 快捷键录制 ---------------- */
@@ -138,6 +167,7 @@ async function refresh() {
       state.hotkey = data.hotkey;
       $('#hotkey').textContent = prettyHotkey(data.hotkey);
     }
+    paintClickMode(data.click_mode || 'event');
     // 瞬时贴图 tile 的 id 以 pin- 开头
     sync((data.tiles || []).filter((t) => t.id.startsWith('pin-')));
   } catch { /* 下轮再试 */ }

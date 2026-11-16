@@ -35,6 +35,15 @@
       <p>截下来的画面会<b>贴在桌面最上层</b>，直接点它就能操作原程序 ——
          但<b>不会</b>把原窗口唤到前台，鼠标也不会被拽走。</p>
       <p class="muted">点上面那个快捷键按钮就能改：按下你想用的组合键即可（Esc 取消）。</p>
+
+      <div class="clickmode">
+        <span class="clickmode-label">点击方式</span>
+        <div class="seg" id="clickmode">
+          <button data-mode="event">事件投递</button>
+          <button data-mode="physical">物理注入</button>
+        </div>
+        <span class="clickmode-hint">点贴图没反应时，切到「物理注入」</span>
+      </div>
     </section>
 
     <div class="pins-head">

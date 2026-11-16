@@ -360,16 +360,26 @@ class X11Backend(PlatformBackend):
                     time.sleep(0.012)
                 restore = (frame, above, stack_ok, prev, int(handle))
             else:
-                # 物理注入兜底：某些自绘 UI 会忽略合成事件
-                prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
-                self._raw_click(sx, sy, xbtn, double)
-                if prev and prev != int(handle):
-                    try:
-                        self._activate(self._dpy.create_resource_object("window", prev))
-                    except Exception:
-                        pass
+                # 物理注入：先把指针挪到目标，点完再挪回原处（用户几乎察觉不到）
+                try:
+                    p = self._root.query_pointer()
+                    orig = (int(p.root_x), int(p.root_y))
+                except Exception:  # noqa: BLE001
+                    orig = None
+                try:
+                    prev = self._prepare_click(win, sx, sy) if _ACTIVATE_BEFORE_CLICK else None
+                    self._raw_click(sx, sy, xbtn, double)
+                    if orig is not None:
+                        self._root.warp_pointer(*orig)
+                        self._dpy.sync()
+                    if prev and prev != int(handle):
+                        try:
+                            self._activate(self._dpy.create_resource_object("window", prev))
+                        except Exception:  # noqa: BLE001
+                            pass
+                finally:
+                    pass
 
-        # 还原放后台：HTTP 请求立刻返回，用户感觉不到等待
         if restore is not None:
             threading.Thread(
                 target=self._restore_after_click, args=restore, daemon=True, name="click-restore"

@@ -391,6 +391,52 @@ body.canvas-mode {
 }
 @keyframes hk-pulse { 50% { opacity: .45; } }
 
+/* 点击方式切换 */
+.clickmode {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.clickmode-label {
+  font-size: 12px;
+  color: var(--muted);
+  font-weight: 600;
+}
+.clickmode-hint {
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.seg button {
+  padding: 4px 12px;
+  font: inherit;
+  font-size: 12px;
+  color: var(--muted);
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: background .15s, color .15s;
+}
+.seg button:hover { color: var(--text); }
+.seg button.on {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 500;
+}
+
 .pins-head {
   display: flex;
   align-items: center;
