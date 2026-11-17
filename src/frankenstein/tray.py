@@ -189,9 +189,9 @@ class TrayApp:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(lambda _item: f"快捷键：{self._pretty()}", None, enabled=False),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("退出 Frankenstein", self._quit),
+            pystray.MenuItem("退出 UI 缝合怪", self._quit),
         )
-        self.icon = pystray.Icon("frankenstein", _icon_image(), "Frankenstein", menu)
+        self.icon = pystray.Icon("ui-frankenstein", _icon_image(), "UI 缝合怪", menu)
 
         threading.Thread(target=self._watchdog, daemon=True, name="tray-watchdog").start()
         print("[i] 托盘已启动（右键图标可打开面板 / 截取 / 设置快捷键 / 退出）")

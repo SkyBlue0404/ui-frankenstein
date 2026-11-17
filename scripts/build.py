@@ -14,7 +14,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-SPEC = ROOT / "frankenstein.spec"
+SPEC = ROOT / "ui-frankenstein.spec"
 
 
 def _rm(path: Path) -> None:
@@ -47,7 +47,7 @@ def main() -> int:
         print(f"[!] 打包失败（exit {rc}）", file=sys.stderr)
         return rc
 
-    out = sorted((ROOT / "dist").glob("frankenstein*"))
+    out = sorted((ROOT / "dist").glob("ui-frankenstein*"))
     print("== 完成 ==")
     for p in out:
         print(f"  {p.relative_to(ROOT)}  ({p.stat().st_size / 1048576:.1f} MB)")

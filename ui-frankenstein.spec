@@ -79,7 +79,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name="frankenstein",
+    name="ui-frankenstein",
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

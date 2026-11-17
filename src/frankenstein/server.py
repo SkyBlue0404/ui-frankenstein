@@ -330,7 +330,7 @@ def create_app(config_path: str | Path) -> FastAPI:
     rt = Runtime(cfg)
     rt.start()
 
-    app = FastAPI(title="Frankenstein", version="0.1.0")
+    app = FastAPI(title="UI 缝合怪", version="0.1.0")
     app.state.runtime = rt
 
     @app.middleware("http")

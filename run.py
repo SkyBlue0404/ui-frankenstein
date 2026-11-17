@@ -119,7 +119,7 @@ def _ui_profile_dir() -> Path:
         base = Path(os.environ.get("LOCALAPPDATA") or (Path.home() / "AppData" / "Local"))
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local" / "share"))
-    path = base / "frankenstein" / "chrome-profile"
+    path = base / "ui-frankenstein" / "chrome-profile"
     try:
         path.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -144,7 +144,7 @@ def open_ui(url: str, mode: str = "app") -> bool:
                 f"--user-data-dir={_ui_profile_dir()}",
                 # 让窗口的 WM_CLASS 变成 frankenstein，
                 # 这样左侧 dock 会显示我们自己的图标（配合 .desktop 的 StartupWMClass）
-                "--class=frankenstein",
+                "--class=ui-frankenstein",
                 "--window-size=1320,900",
                 "--no-first-run",
                 "--no-default-browser-check",
@@ -175,7 +175,7 @@ def _spawn_daemon() -> bool:
 
 
 def _already_running(url: str) -> bool:
-    """端口上是不是已经有一个 Frankenstein 在跑。"""
+    """端口上是不是已经有一个 UI 缝合怪 在跑。"""
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/api/state", timeout=1.0) as resp:
             return resp.status == 200
@@ -283,7 +283,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 已经有实例在跑（后台守护模式）：只把面板弹出来，不再抢端口
     if _already_running(url):
-        print(f"[i] Frankenstein 已经在后台运行：{url}")
+        print(f"[i] UI 缝合怪 已经在后台运行：{url}")
         if not args.no_window:
             page = "" if args.page == "canvas" else args.page
             target = url if not page else url.rstrip("/") + "/" + page
@@ -291,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.open_only:
-        print(f"[!] 没检测到运行中的 Frankenstein（{url}）", file=sys.stderr)
+        print(f"[!] 没检测到运行中的 UI 缝合怪（{url}）", file=sys.stderr)
         print("    先启动服务：frankenstein --no-window", file=sys.stderr)
         return 1
 
@@ -301,7 +301,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = create_app(config_path)
 
-    print(f"Frankenstein  →  {url}")
+    print(f"UI 缝合怪  →  {url}")
     print(f"  编辑布局: {url}setup")
     print(f"  配置文件: {config_path.resolve()}")
     print("  Ctrl-C 退出")

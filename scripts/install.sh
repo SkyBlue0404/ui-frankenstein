@@ -8,7 +8,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN_NAME="frankenstein"
+BIN_NAME="ui-frankenstein"
 BIN_SRC="$ROOT/dist/$BIN_NAME"
 BIN_DST="$HOME/.local/bin/$BIN_NAME"
 APPS_DIR="$HOME/.local/share/applications"
@@ -46,12 +46,12 @@ cat > "$DESKTOP" <<EOF
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Frankenstein
-Name[zh_CN]=缝合怪
+Name=UI 缝合怪
+Name[zh_CN]=UI 缝合怪
 Comment=Stitch regions of several running windows into one control panel
 Comment[zh_CN]=把多个正在运行的工具窗口的指定区域缝成一个操作面板
 Exec=$BIN_DST
-StartupWMClass=frankenstein
+StartupWMClass=ui-frankenstein
 Icon=$BIN_NAME
 Terminal=false
 Categories=Utility;Development;
@@ -67,8 +67,8 @@ if [[ $NO_AUTOSTART -eq 0 ]]; then
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Frankenstein Daemon
-Name[zh_CN]=缝合怪（后台常驻）
+Name=UI 缝合怪 Daemon
+Name[zh_CN]=UI 缝合怪（后台常驻）
 Comment=Keep Frankenstein running in the background for the global hotkey
 Comment[zh_CN]=后台常驻，顶部状态栏显示图标，右键可切前台 / 设快捷键 / 退出
 Exec=$BIN_DST --tray
@@ -90,10 +90,10 @@ echo "  图标      $ICON"
 [[ $NO_AUTOSTART -eq 0 ]] && echo "  登录自启  $AUTOSTART"
 echo
 echo "用法："
-echo "  frankenstein              启动并打开面板（后台已在跑就只弹面板）"
-echo "  frankenstein --no-window  只跑后台，不弹窗口（自启用的就是这个）"
-echo "  frankenstein --quit       关掉后台实例"
-echo "  frankenstein --list-windows  看看有哪些窗口"
+echo "  ui-frankenstein              启动并打开面板（后台已在跑就只弹面板）"
+echo "  ui-frankenstein --no-window  只跑后台，不弹窗口（自启用的就是这个）"
+echo "  ui-frankenstein --quit       关掉后台实例"
+echo "  ui-frankenstein --list-windows  看看有哪些窗口"
 echo
 if ! echo ":$PATH:" | grep -q ":$HOME/.local/bin:"; then
     echo "提示：~/.local/bin 不在 PATH 里，加一下才能直接敲 frankenstein："

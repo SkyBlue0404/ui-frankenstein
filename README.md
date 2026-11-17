@@ -1,6 +1,6 @@
-# Frankenstein
+# UI 缝合怪
 
-> 缝合怪 —— 把好几个进程的界面缝到一起。
+> UI 缝合怪 —— 把好几个进程的界面缝到一起。
 
 把多个正在运行的工具窗口里**你关心的那一小块**（比如操作按钮栏、状态灯、日志尾部）抠出来，
 拼成一个**自适应**的网页面板。页面上点一下，事件会**回传到原窗口**——
@@ -44,7 +44,7 @@ python scripts/build.py     # 先打包
 ./scripts/install.sh        # 装到 ~/.local：可执行文件 + 应用菜单项 + 图标
 ```
 
-装完在应用菜单里搜 **Frankenstein / 缝合怪** 就能启动。卸载：
+装完在应用菜单里搜 **UI 缝合怪** 就能启动。卸载：
 
 ```bash
 ./scripts/install.sh --uninstall
@@ -53,23 +53,23 @@ python scripts/build.py     # 先打包
 ### 前台 / 后台两种形态
 
 **后台模式**（登录自启）：顶部状态栏（Windows 是右下角托盘区）常驻一个
-**Frankenstein 图标**。不占屏幕、不弹窗口。右键图标：
+**UI 缝合怪 图标**。不占屏幕、不弹窗口。右键图标：
 
 - **打开面板** —— 切到前台
 - **截取区域** —— 等同按快捷键
 - **设置快捷键** —— 打开 `/pins` 录制
-- **退出 Frankenstein**
+- **退出 UI 缝合怪**
 
 **前台模式**：打开的面板是独立窗口（无地址栏、无标签页），
-并且在左侧 **dock 里有自己的 Frankenstein 图标** —— 因为窗口用独立浏览器 profile
-启动了 `--class=frankenstein`，配合 `.desktop` 的 `StartupWMClass` 被识别成独立应用。
+并且在左侧 **dock 里有自己的 UI 缝合怪 图标** —— 因为窗口用独立浏览器 profile
+启动了 `--class=ui-frankenstein`，配合 `.desktop` 的 `StartupWMClass` 被识别成独立应用。
 
 ```bash
-frankenstein              # 启动并打开面板（后台已在跑就只弹面板）
-frankenstein --tray       # 后台常驻 + 托盘图标（自启用的就是这条）
-frankenstein --no-window  # 纯后台，连托盘都不要
-frankenstein --quit       # 关掉后台实例
-frankenstein --open-only --page pins   # 只打开 /pins 页
+ui-frankenstein              # 启动并打开面板（后台已在跑就只弹面板）
+ui-frankenstein --tray       # 后台常驻 + 托盘图标（自启用的就是这条）
+ui-frankenstein --no-window  # 纯后台，连托盘都不要
+ui-frankenstein --quit       # 关掉后台实例
+ui-frankenstein --open-only --page pins   # 只打开 /pins 页
 ```
 
 不想要自启：`./scripts/install.sh --no-autostart`。
@@ -91,8 +91,8 @@ frankenstein --open-only --page pins   # 只打开 /pins 页
 
 | 平台 | 产物 | 用法 |
 |---|---|---|
-| Linux | `dist/frankenstein` | `./dist/frankenstein` |
-| Windows | `dist/frankenstein.exe` | 双击 |
+| Linux | `dist/ui-frankenstein` | `./dist/ui-frankenstein` |
+| Windows | `dist/ui-frankenstein.exe` | 双击 |
 
 首次运行会在可执行文件旁边自动生成 `config.json`。
 
@@ -272,7 +272,7 @@ Per-Monitor DPI Aware，避免高分屏下坐标偏移。
 
 ```bash
 pip install -r requirements.txt pyinstaller
-pyinstaller --noconfirm --clean frankenstein.spec
+pyinstaller --noconfirm --clean ui-frankenstein.spec
 # 或者用封装好的脚本（会先清理 build/ dist/）：
 python scripts/build.py
 ```
@@ -281,8 +281,8 @@ python scripts/build.py
 
 | 平台 | 产物 |
 |---|---|
-| Linux | `dist/frankenstein` |
-| Windows | `dist/frankenstein.exe` |
+| Linux | `dist/ui-frankenstein` |
+| Windows | `dist/ui-frankenstein.exe` |
 
 > PyInstaller **不支持交叉编译** —— 在 Linux 上打不出 Windows 的 exe，反之亦然。
 > 仓库里带了 `.github/workflows/build.yml`，推到 GitHub 后会自动在两种原生
@@ -303,7 +303,7 @@ Windows 上可以换成 `PostMessage` 模式（见 `src/frankenstein/platform/wi
 
 ```
 run.py                     入口 / CLI
-frankenstein.spec          PyInstaller 打包配置
+ui-frankenstein.spec          PyInstaller 打包配置
 requirements.txt           Python 依赖
 config.example.json        示例配置
 config.json                你的配置（首次运行自动生成，已在 .gitignore）
